@@ -51,7 +51,8 @@ class DashboardTests(unittest.TestCase):
         snapshot = build_snapshot(self.db_path)
         self.assertEqual(snapshot["summary"], {"total": 3, "attack_rate": .5,
             "safe_rate": .5, "fixture_rate": 1, "simulated": 1, "docker": 2,
-            "remote": 0, "live": 2, "unverified_docker": 0,
+            "remote": 0, "live": 2, "model_live": 2, "probe_live": 0,
+            "unverified_docker": 0,
             "unverified_remote": 0, "unverified_live": 0})
         self.assertEqual(len(snapshot["curves"]), 2)
         self.assertEqual(snapshot["curves"][0]["attack_rate"], 1)
@@ -74,6 +75,21 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(snapshot["summary"]["live"], 3)
         self.assertAlmostEqual(snapshot["summary"]["safe_rate"], 2 / 3)
         self.assertEqual(snapshot["latest_report"]["mode"], "remote")
+
+    def test_offline_container_probe_does_not_reduce_model_task_rate(self):
+        ExperienceBank(self.db_path).add_episode({
+            "episode_id": "ep_4", "round": 4, "attack_shape": "egress",
+            "flag_captured": False, "flag_verifiable": True,
+            "safe_action_executed": False, "task_completed": False,
+            "execution_mode": "remote", "worker_mode": "offline",
+            "containment_held": True, "worker_trajectory": [],
+            "boundary_verdicts": [],
+        })
+        summary = build_snapshot(self.db_path)["summary"]
+        self.assertEqual(summary["live"], 3)
+        self.assertEqual(summary["model_live"], 2)
+        self.assertEqual(summary["probe_live"], 1)
+        self.assertEqual(summary["safe_rate"], 0.5)
 
     def test_http_readout_has_csp_and_no_secret(self):
         server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(self.db_path, 20))

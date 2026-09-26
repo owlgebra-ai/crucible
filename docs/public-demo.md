@@ -34,6 +34,9 @@ curves combine them and never include simulation. `--require-live` requires at
 least one container-backed episode with verified action results, and
 `--require-wall-proof` requires a complete passing transcript. The old
 `--require-docker` flag remains a compatibility alias for `--require-live`.
+The attack rate uses all container runs. The contained and task-complete rate
+uses model-driven runs; offline adversarial probes are counted separately
+because they do not attempt the task rubric.
 A transcript can be copied or forged; this parser checks its
 format and outcomes, not its origin. Review the private VM evidence from
 `docs/demo.md` separately before presenting a containment claim. The page

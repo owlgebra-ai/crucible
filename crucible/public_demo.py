@@ -235,7 +235,7 @@ def public_snapshot(private: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(original, dict):
         original = {}
     summary = {field: _bounded_int(original.get(field)) for field in
-               ("total", "simulated", "docker", "remote")}
+               ("total", "simulated", "docker", "remote", "model_live", "probe_live")}
     summary["live"] = summary["docker"] + summary["remote"]
     # The exporter fills this from inspected episode results, rather than
     # treating an execution-mode label or summary count as verification.

@@ -90,6 +90,8 @@ class PublicDemoTests(unittest.TestCase):
         self.assertEqual(result["events"][0]["dimension"], "D6 output filter")
         self.assertEqual(result["events"][0]["detail"], "")
         self.assertEqual(result["patterns"][0]["recommended_defense"], "Outbound secret scan")
+        self.assertEqual(result["summary"]["model_live"], 0)
+        self.assertEqual(result["summary"]["probe_live"], 0)
         self.assertIsNone(result["latest_report"])
 
     def test_export_has_no_unknown_secret_even_when_bank_contains_it(self):
