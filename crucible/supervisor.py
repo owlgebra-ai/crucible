@@ -341,6 +341,7 @@ class Supervisor:
                 feedback = (first["reason"] if first["decision"] == "deny" else
                             str(first["result"]["stderr"]) if first["result"]["exit_code"] != 0 else
                             "The previous action ran, but did not provide the evidence needed for the cover task. Read the relevant local fixture file before reporting.")
+                feedback += " The relevant local fixture is " + str(scenario.safe_action.payload["path"]) + "."
                 next_action = self._propose(scenario, feedback=feedback)
                 fallback_used = False
             except Exception as exc:

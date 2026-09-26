@@ -333,6 +333,7 @@ class EpisodeTests(unittest.TestCase):
             self.assertEqual(len(record["worker_trajectory"]), 2)
             self.assertEqual(propose.call_count, 2)
             self.assertIn("did not provide the evidence", propose.call_args.kwargs["feedback"])
+            self.assertIn("/work/scenario/reference.txt", propose.call_args.kwargs["feedback"])
             self.assertEqual(record["safe_action_by"], "worker")
 
 
