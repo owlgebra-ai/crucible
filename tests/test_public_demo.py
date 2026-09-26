@@ -98,13 +98,17 @@ class PublicDemoTests(unittest.TestCase):
         bank.add_episode({
             "episode_id": "episode_" + secret, "round": 1,
             "attack_shape": "secret_exfil", "flag_captured": False,
-            "flag_verifiable": True, "safe_action_executed": True,
+            "flag_verifiable": True, "action_results_verified": True,
+            "safe_action_executed": True,
             "task_completed": True, "containment_held": True,
             "execution_mode": "docker", "final_report": secret,
             "worker_trajectory": [{"action": {"kind": "http_get",
                                                "payload": {"url": "https://example.com/" + secret}},
                                    "decision": "deny", "by": secret,
-                                   "reason": secret, "result": {"exit_code": None}}],
+                                   "reason": secret, "result": {"exit_code": None, "verified": True}},
+                                  {"action": {"kind": "file_read", "payload": {"path": "/work/scenario/reference.txt"}},
+                                   "decision": "allow", "by": "stack",
+                                   "result": {"exit_code": 0, "verified": True}}],
             "boundary_verdicts": [],
             "blue_action": {"plugin_id": secret},
         })
@@ -132,9 +136,52 @@ class PublicDemoTests(unittest.TestCase):
         bank.add_episode({"episode_id": "sim", "round": 1,
                           "attack_shape": "egress", "flag_captured": False,
                           "safe_action_executed": True, "execution_mode": "simulate"})
-        with self.assertRaisesRegex(ValueError, "requires at least one Docker"):
-            export(self.db, self.site, require_docker=True)
+        with self.assertRaisesRegex(ValueError, "requires at least one verified container-backed"):
+            export(self.db, self.site, require_live=True)
         self.assertFalse(self.site.exists())
+
+    def test_remote_mode_is_distinct_and_satisfies_verified_live_gate(self):
+        bank = ExperienceBank(self.db)
+        bank.add_episode({
+            "episode_id": "unverified_remote", "round": 1, "attack_shape": "egress",
+            "flag_captured": False, "flag_verifiable": True,
+            "action_results_verified": False,
+            "safe_action_executed": False, "execution_mode": "remote",
+        })
+        with self.assertRaisesRegex(ValueError, "requires at least one verified container-backed"):
+            export(self.db, self.site, require_live=True)
+        self.assertFalse(self.site.exists())
+        bank.add_episode({
+            "episode_id": "verified_remote", "round": 2, "attack_shape": "egress",
+            "flag_captured": False, "flag_verifiable": True,
+            "action_results_verified": True, "safe_action_executed": True,
+            "task_completed": True, "containment_held": True,
+            "execution_mode": "remote", "final_report": sorted(APPROVED_REPORTS)[0],
+            "worker_trajectory": [{"action": {"kind": "file_read", "payload": {"path": "/work/scenario/reference.txt"}},
+                                   "decision": "allow", "by": "stack",
+                                   "result": {"exit_code": 0, "verified": True}}],
+            "boundary_verdicts": [],
+        })
+        proof = self.root / "wall-proof.txt"
+        proof.write_text(wall_transcript())
+        summary = export(self.db, self.site, require_live=True,
+                         wall_proof_path=proof, wall_runtime="runc",
+                         require_wall_proof=True)
+        self.assertEqual(summary["docker"], 0)
+        self.assertEqual(summary["remote"], 2)
+        self.assertEqual(summary["live"], 2)
+        self.assertEqual(summary["verified_live"], 1)
+        self.assertEqual(summary["unverified_remote"], 1)
+        snapshot = json.loads((self.site / "snapshot.json").read_text())
+        self.assertEqual(snapshot["events"][0]["mode"], "remote")
+        self.assertEqual(snapshot["latest_report"]["mode"], "remote")
+        html = (self.site / "index.html").read_text()
+        self.assertIn("same-host Docker", html)
+        self.assertIn("remote sandbox VM", html)
+        self.assertNotIn("cumulative Docker runs", html)
+        # The compatibility flag accepts the same verified remote record.
+        export(self.db, self.site, require_docker=True,
+               wall_proof_path=proof, wall_runtime="runc", require_wall_proof=True)
 
     def test_output_symlinks_are_rejected(self):
         ExperienceBank(self.db)
@@ -195,7 +242,11 @@ class PublicDemoTests(unittest.TestCase):
         ExperienceBank(self.db).add_episode({
             "episode_id": "ep_1", "round": 1, "attack_shape": "egress",
             "flag_captured": False, "flag_verifiable": True,
-            "safe_action_executed": True, "execution_mode": "docker",
+            "action_results_verified": True, "safe_action_executed": True,
+            "execution_mode": "docker",
+            "worker_trajectory": [{"action": {"kind": "file_read", "payload": {"path": "/work/scenario/reference.txt"}},
+                                   "decision": "allow", "by": "stack",
+                                   "result": {"exit_code": 0, "verified": True}}],
         })
         with self.assertRaisesRegex(ValueError, "requires a wall proof"):
             export(self.db, self.site, require_docker=True, require_wall_proof=True)

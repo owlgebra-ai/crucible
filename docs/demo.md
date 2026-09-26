@@ -1,10 +1,43 @@
 # CRUCIBLE hackathon demo runbook
 
-Run this on a dedicated Linux VM after reviewing [deployment setup](../deploy/README.md).
+Use the two-VM deployment in [deployment setup](../deploy/README.md) for the
+hackathon demo. The control VM holds Vultr inference and the private bank; the
+sandbox VM holds Docker, the forced SSH gateway, and the containment rules.
 The current checkout has no captured VM wall proof. Keep the inference key in
-the host's root-readable `/etc/crucible/inference.env`; the deployment archive
-excludes it and the worker container does not receive it. Set a VM spend limit and teardown
-time before provisioning. Do not show the key file in the recording.
+the control VM's root-readable `/etc/crucible/inference.env`; the deployment
+archive excludes it and the sandbox VM never receives it. Set a VM spend limit
+and teardown time before provisioning. Do not show the key file in the recording.
+
+## Two-VM evidence sequence
+
+1. On the sandbox VM, run `sudo bash /opt/crucible/current/infra/prove-wall.sh`
+   and privately save the complete transcript. Check its runtime, effective
+   seccomp policy, successful pinned TLS, denied DNS and `ptrace`, the
+   direct-IP probe counter before the final DROP, and container teardown.
+2. On the control VM, set `CRUCIBLE_REMOTE_TARGET=root@SANDBOX_VPC_IP`,
+   `CRUCIBLE_REMOTE_IDENTITY` to the owner-only control key, and
+   `CRUCIBLE_REMOTE_KNOWN_HOSTS` to the pinned host-key file. With
+   `CRUCIBLE_ENV_FILE=/etc/crucible/inference.env`, run
+   `python3 -m crucible.vultr smoke --chat` and then
+   `python3 -m crucible demo --mode vultr --execution remote --rounds 4`.
+   Save the output and `python3 -m crucible bank` in private storage. The
+   gateway accepts only a small action protocol and rechecks each action
+   before Docker execution. Verify that the episode records say
+   `execution_mode: remote`, contain verified worker results, a safe action,
+   a validated report, and a destroyed container.
+3. Tunnel the control VM's loopback dashboard to the recording laptop. Keep
+   the sandbox wall proof beside it; dashboard metrics summarize episodes but
+   do not replace packet or syscall evidence. Generate the public static
+   snapshot only after reviewing the private bank and complete wall proof,
+   following [the public demo guide](public-demo.md).
+
+The control-to-sandbox SSH path must be tested over the private VPC address.
+If the provider firewall or host policy blocks it, inspect the actual rules
+and allow only the control VM's private address on TCP/22 before continuing.
+VPC attachment can restart an instance, so wait for both VMs to become ready
+before validating host keys and running the episode.
+
+## Same-host Docker fallback
 
 ## Prepare and capture evidence on the VM
 
@@ -72,9 +105,10 @@ recording laptop, open a separate terminal:
 ssh -N -L 8787:127.0.0.1:8787 USER@VM_IP
 ```
 
-Open `http://127.0.0.1:8787` in the laptop browser. Its Docker safe-outcome
-curve counts records with `containment_held && task_completed`; simulation is
-shown separately. The latest report panel and attack/defense patterns come
+Open `http://127.0.0.1:8787` in the laptop browser. Its live safe-outcome
+curve counts verified Docker and remote sandbox VM records with
+`containment_held && task_completed`; the modes and simulation are shown
+separately. The latest report panel and attack/defense patterns come
 from sanitized bank records. A dashboard curve is a summary, so keep the
 terminal wall proof beside it.
 
@@ -82,10 +116,10 @@ One-minute recording shot list:
 
 | Time | Show |
 | --- | --- |
-| 0–8 s | CRUCIBLE flow and six controls; say the Python Docker worker is the live execution path. |
-| 8–23 s | VM wall proof: container/image IDs, bridge/source IP, pinned TLS, `ptrace` denial, and probe-specific DROP-path count. |
-| 23–40 s | One model-driven Docker episode: D3 pre-exec verdict, safe action, `task_completed`, sanitized report, blue adaptation; show a D6 redacted canary record if captured. |
-| 40–53 s | Dashboard's Docker curve, latest report, and attack/defense pattern bank. |
+| 0–8 s | CRUCIBLE flow and six controls; identify the control and sandbox VMs and their private connection. |
+| 8–23 s | Sandbox VM wall proof: container/image IDs, bridge/source IP, pinned TLS, `ptrace` denial, and probe-specific DROP-path count. |
+| 23–40 s | One model-driven remote episode: D3 pre-exec verdict, safe action, `task_completed`, sanitized report, blue adaptation; show a D6 redacted canary record if captured. |
+| 40–53 s | Control VM dashboard's live curve, latest report, and attack/defense pattern bank. |
 | 53–60 s | Empty matching worker-container listing and the saved evidence files. |
 
 State clearly that the DSH host adapter is a policy-hook demonstration. Its
@@ -101,6 +135,7 @@ the dashboard if the VM will be retained:
 sudo systemctl stop crucible-dashboard.service
 ```
 
-Confirm no `crucible.managed=true` container remains. Destroy the temporary VM
-in the Vultr Console when the experiment ends; merely stopping a VM can leave
-compute billing active. Do not flush the host firewall to clean up CRUCIBLE.
+Confirm no `crucible.managed=true` container remains on the sandbox VM.
+Destroy both temporary VMs and any separately billed resources in the Vultr
+Console when the experiment ends; merely stopping a VM can leave compute
+billing active. Do not flush the host firewall to clean up CRUCIBLE.

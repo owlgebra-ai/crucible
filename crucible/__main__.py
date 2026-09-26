@@ -17,7 +17,7 @@ def main() -> int:
     demo = command.add_parser("demo", help="run bounded red/blue episodes")
     demo.add_argument("--rounds", type=int, default=4)
     demo.add_argument("--mode", choices=["offline", "vultr"], default="offline")
-    demo.add_argument("--execution", choices=["docker", "simulate"], default="docker")
+    demo.add_argument("--execution", choices=["docker", "remote", "simulate"], default="docker")
     demo.add_argument("--no-adapt", action="store_true")
     command.add_parser("bank", help="show sanitized experience entries")
     args = parser.parse_args()

@@ -12,7 +12,7 @@ red scenario → worker proposal → supervisor policy checks → disposable wor
               blue pull/write → probe unsafe and safe actions → remount policy
 ```
 
-The supervisor keeps Vultr credentials on the host. In the Python Docker path, worker actions run through a pre-execution seam and the Linux worker image receives no inference or account API key. Offline simulation exercises the control flow without claiming an actual sandbox boundary.
+The supervisor keeps Vultr credentials on the control host. For the two-VM path, it sends bounded actions over a pinned, forced-command SSH connection on a private Vultr VPC network to a separate sandbox VM. The sandbox VM creates a disposable Docker worker for each episode. The worker image receives no inference or account API key. Offline simulation exercises the control flow without claiming an actual sandbox boundary.
 
 | Dimension | Control | Current implementation |
 | --- | --- | --- |
@@ -21,7 +21,7 @@ The supervisor keeps Vultr credentials on the host. In the Python Docker path, w
 | D3 Command/injection classifier | Pre-exec semantic judgment | `crucible/plugins/d3_classifier.py`; requires inference access |
 | D4 Lifecycle | Fresh container per episode, bounded resources, destroy after use | `infra/create-worker.sh` starts one container, `infra/exec-worker.sh` runs approved actions in it, and `infra/destroy-worker.sh` removes it in the episode's `finally` block |
 | D5 Experience bank | Episode records and distilled attack/defense patterns | SQLite in `crucible/experience.py`, local retrieval with optional Vultr rerank |
-| D6 Exfil/output filter | Scan outgoing actions, worker output, records, and dashboard text for known secret markers and common encodings | `crucible/plugins/d6_output_filter.py` |
+| D6 Exfil/output filter | Scan outgoing actions, output before it leaves the worker, remote gateway responses, records, and dashboard text for known secret markers and common encodings | `crucible/secret_scan.py`, `crucible/worker.py`, `crucible/plugins/d6_output_filter.py` |
 
 Controls in Python are policy decisions. A real network or syscall containment claim requires the Linux evidence described below.
 
@@ -40,7 +40,7 @@ python3 -m crucible bank
 python3 -m crucible.dashboard --db data/experience.sqlite --host 127.0.0.1 --port 8787
 ```
 
-Open `http://127.0.0.1:8787` on the same host for the read-only dashboard; for a VM, use an SSH tunnel as shown in the [runbook](docs/demo.md). Its two curves use Docker episode records only: attack success, and `containment_held` **and** `task_completed`. Completion requires the exact safe action to exit successfully and a sanitized final report to pass the scenario rubric. Simulated fixture completion is shown separately. The latest report panel shows a sanitized completed report. These records do not replace the packet or syscall evidence needed for a live wall proof. Bind to loopback by default; use an authenticated TLS reverse proxy if sharing it outside the VM.
+Open `http://127.0.0.1:8787` on the same host for the read-only dashboard; for a VM, use an SSH tunnel as shown in the [runbook](docs/demo.md). The live curves include verified same-host Docker and remote sandbox VM episodes: attack success, and `containment_held` **and** `task_completed`. The dashboard shows the two execution modes separately. Completion requires the exact safe action to exit successfully and a sanitized final report to pass the scenario rubric. Simulated fixture completion is shown separately. The latest report panel shows a sanitized completed report. These records do not replace the packet or syscall evidence needed for a live wall proof. Bind to loopback by default; use an authenticated TLS reverse proxy if sharing it outside the VM.
 
 The live Vultr catalog is [`GET /v1/models`](https://api.vultrinference.com/v1/models). The user-supplied `/v1/chat/models` path returned HTTP 404 on September 26, 2026; `/v1/models` returned 200. The supplied [Serverless Inference documentation path](https://docs.vultr.com/products/serverless/inference) redirects to the current [Serverless Inference section](https://docs.vultr.com/products/compute/serverless-inference). `smoke` checks all configured role IDs against the catalog without a key. Add `--chat` only when an inference key is available; that makes one small billed chat request.
 
@@ -54,7 +54,7 @@ Inference uses `POST /v1/chat/completions`; retrieval can use the documented `PO
 
 ## Linux VM deployment prerequisites
 
-Use a Vultr Linux VM with root or sudo, Docker using its iptables backend, `iptables`, `ip6tables`, Python 3.10+, and access to kernel firewall logs. Configure the custom bridge and its host firewall **on that VM**; macOS Docker Desktop behavior is not an equivalent proof. `infra/setup-net.sh` pins allowlisted host IPs and installs a logged default drop in `DOCKER-USER`. `infra/crucible-seccomp.json` is the Docker exec profile. The worker image is built with `infra/build-worker.sh`. Run the Docker path only after its runner script and policy setup are present and validated on the VM:
+Use a Vultr Linux sandbox VM with root or sudo, Docker using its iptables backend, `iptables`, `ip6tables`, Python 3.10+, and access to kernel firewall logs. Configure the custom bridge and its host firewall **on that VM**; macOS Docker Desktop behavior is not an equivalent proof. `infra/setup-net.sh` pins allowlisted host IPs and installs a logged default drop in `DOCKER-USER`. `infra/crucible-seccomp.json` is the Docker exec profile. The worker image is built with `infra/build-worker.sh`. Run the Docker path only after its runner script and policy setup are present and validated on the VM:
 
 ```bash
 sudo bash infra/setup-net.sh
@@ -65,6 +65,8 @@ sudo python3 -m crucible demo --mode offline --execution docker --rounds 4
 The host firewall changes require care on a shared VM. Review the bridge/subnet and allowlist values before running setup. The dashboard port is separate from container egress policy.
 
 The brokered worker allows only the exact read-only URLs `https://pypi.org/simple/` and `https://registry.npmjs.org/-/ping`. The D6 scanner catches known canaries and common base64, hex, and percent encodings; arbitrary secret transformations are outside this scanner's guarantee. On the VM, keep the inference key at `/etc/crucible/inference.env` using `deploy/install-inference-key.sh`, then run model episodes with `CRUCIBLE_ENV_FILE` as shown in the demo runbook.
+
+For the two-VM path, keep the inference key and private experience bank on the **control VM only**. Attach both VMs to the same private Vultr VPC network, deploy the sandbox release to the sandbox VM, and authorize one source-bound, forced-command control key there. Run `--execution remote` on the control VM with its pinned private SSH target. The sandbox VM contains Docker, the network and syscall controls, and the output-scanning gateway; it does not receive the model or management credential. The [deployment runbook](deploy/README.md) describes the provisioning and key exchange. An SSH transport or database record alone does not prove container containment: capture `infra/prove-wall.sh` on the sandbox VM.
 
 ## Evidence for a real wall proof
 

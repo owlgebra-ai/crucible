@@ -89,7 +89,7 @@ class VultrManagement:
                                     HTTPSHandler(context=_tls_context()))
 
     def request(self, method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
-        if method not in {"GET", "POST"} or not path.startswith("/") or "//" in path:
+        if method not in {"GET", "POST", "DELETE"} or not path.startswith("/") or "//" in path:
             raise ValueError("Invalid management request")
         data = None if payload is None else json.dumps(payload, separators=(",", ":")).encode("utf-8")
         headers = {"Accept": "application/json", "Authorization": f"Bearer {self._key}"}
@@ -303,9 +303,23 @@ def _verify_firewall(api: VultrManagement, group_id: str, admin_ip: str) -> None
     if not isinstance(rule, dict) or not (
         rule.get("ip_type") == "v4" and rule.get("protocol") == "tcp" and
         str(rule.get("port")) == "22" and rule.get("subnet") == admin_ip and
-        rule.get("subnet_size") == 32 and rule.get("source", "") == ""
+        str(rule.get("subnet_size")) == "32" and
+        rule.get("source", "") in {"", f"{admin_ip}/32"}
     ):
         raise ProvisionError("New firewall group has an unexpected rule; VM was not created")
+
+
+def _verify_reusable_firewall(api: VultrManagement, group_id: str, admin_ip: str) -> None:
+    if not re.fullmatch(r"[A-Za-z0-9-]{4,100}", group_id):
+        raise ProvisionError("Invalid existing firewall group ID")
+    group = api.request("GET", f"/firewalls/{group_id}").get("firewall_group")
+    if not isinstance(group, dict) or group.get("id") != group_id or \
+            group.get("description") != f"crucible SSH {admin_ip}/32":
+        raise ProvisionError("Existing firewall group has unexpected identity or description")
+    _verify_firewall(api, group_id, admin_ip)
+    instances = api.list_all("/instances", "instances")
+    if any(item.get("firewall_group_id") == group_id for item in instances):
+        raise ProvisionError("Existing firewall group is already attached to an instance")
 
 
 def _write_state(state: dict[str, Any], path: Path = STATE_FILE) -> None:
@@ -319,6 +333,28 @@ def _write_state(state: dict[str, Any], path: Path = STATE_FILE) -> None:
     os.replace(temp_path, path)
 
 
+def guard_pair_estimate(plan: Plan, peer_state: Path, aggregate_cap: str) -> Decimal:
+    """Require the recorded peer plus this VM to fit one compute estimate cap."""
+    if peer_state.is_symlink() or not peer_state.is_file() or peer_state.stat().st_mode & 0o077:
+        raise ProvisionError("Peer VM state must be a regular owner-only file")
+    if ROOT / "secrets" not in peer_state.resolve().parents:
+        raise ProvisionError("Peer VM state must be under the ignored secrets directory")
+    try:
+        peer = json.loads(peer_state.read_text(encoding="utf-8"))
+    except (OSError, ValueError, UnicodeError):
+        raise ProvisionError("Cannot read peer VM recovery state") from None
+    if not isinstance(peer, dict) or peer.get("region") != plan.region or not peer.get("instance_id"):
+        raise ProvisionError("Peer VM must be a provisioned instance in the same region")
+    peer_estimate = _money(peer.get("estimated_compute_usd"), "peer compute estimate")
+    total = plan.estimated + peer_estimate
+    cap = _money(aggregate_cap, "aggregate compute cap")
+    if total > cap:
+        raise ProvisionError(f"Two-VM estimated compute ${total} exceeds aggregate cap ${cap}")
+    print(f"Two-VM estimated compute: ${peer_estimate} peer + ${plan.estimated} planned = ${total} \
+against aggregate cap ${cap}")
+    return total
+
+
 def _valid_public_ip(value: Any) -> bool:
     try:
         return isinstance(value, str) and ipaddress.ip_address(value).version == 4 and ipaddress.ip_address(value).is_global
@@ -327,7 +363,8 @@ def _valid_public_ip(value: Any) -> bool:
 
 
 def apply_plan(api: VultrManagement, plan: Plan, existing_key_id: str | None,
-               *, state_path: Path = STATE_FILE, poll_seconds: int = 600) -> dict[str, Any]:
+               *, state_path: Path = STATE_FILE, poll_seconds: int = 600,
+               existing_firewall_group_id: str | None = None) -> dict[str, Any]:
     state_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     lock_path = state_path.with_suffix(".lock")
     try:
@@ -338,15 +375,19 @@ def apply_plan(api: VultrManagement, plan: Plan, existing_key_id: str | None,
             except BlockingIOError:
                 raise ProvisionError("Another VM provisioning attempt is already running") from None
             return _apply_plan_locked(api, plan, existing_key_id,
-                                      state_path=state_path, poll_seconds=poll_seconds)
+                                      state_path=state_path, poll_seconds=poll_seconds,
+                                      existing_firewall_group_id=existing_firewall_group_id)
     except OSError:
         raise ProvisionError("Cannot create the local provisioning lock") from None
 
 
 def _apply_plan_locked(api: VultrManagement, plan: Plan, existing_key_id: str | None,
-                       *, state_path: Path, poll_seconds: int) -> dict[str, Any]:
+                       *, state_path: Path, poll_seconds: int,
+                       existing_firewall_group_id: str | None = None) -> dict[str, Any]:
     if state_path.exists():
         raise ProvisionError(f"Local provision state already exists at {state_path}; inspect or destroy that VM first")
+    if existing_firewall_group_id is not None:
+        _verify_reusable_firewall(api, existing_firewall_group_id, plan.admin_ip)
     key_id = existing_key_id
     if key_id is None:
         response = api.request("POST", "/ssh-keys", {
@@ -355,13 +396,17 @@ def _apply_plan_locked(api: VultrManagement, plan: Plan, existing_key_id: str | 
         })
         key_id = _required_id(response, "ssh_key")
         print(f"Registered SSH key ID: {key_id}")
-    response = api.request("POST", "/firewalls", {"description": f"crucible SSH {plan.admin_ip}/32"})
-    group_id = _required_id(response, "firewall_group")
-    print(f"Created firewall group ID: {group_id}")
-    api.request("POST", f"/firewalls/{group_id}/rules", {
-        "ip_type": "v4", "protocol": "tcp", "port": "22", "subnet": plan.admin_ip,
-        "subnet_size": 32, "source": "", "notes": "CRUCIBLE admin SSH only",
-    })
+    if existing_firewall_group_id is not None:
+        group_id = existing_firewall_group_id
+        print(f"Reusing verified firewall group ID: {group_id}")
+    else:
+        response = api.request("POST", "/firewalls", {"description": f"crucible SSH {plan.admin_ip}/32"})
+        group_id = _required_id(response, "firewall_group")
+        print(f"Created firewall group ID: {group_id}")
+        api.request("POST", f"/firewalls/{group_id}/rules", {
+            "ip_type": "v4", "protocol": "tcp", "port": "22", "subnet": plan.admin_ip,
+            "subnet_size": 32, "source": "", "notes": "CRUCIBLE admin SSH only",
+        })
     _verify_firewall(api, group_id, plan.admin_ip)
     label = "crucible-" + datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S") + "-" + os.urandom(3).hex()
     response = api.request("POST", "/instances", {
@@ -465,6 +510,12 @@ def main(argv: list[str] | None = None) -> int:
     provision.add_argument("--ssh-public-key", required=True, type=Path)
     provision.add_argument("--max-hours", type=int)
     provision.add_argument("--max-total-spend", help="Maximum estimated compute cost in USD")
+    provision.add_argument("--state-file", type=Path, default=STATE_FILE,
+                           help="Private local recovery record; use separate paths for control and sandbox VMs")
+    provision.add_argument("--peer-state", type=Path,
+                           help="Existing first-VM state; enforce --max-total-spend against combined compute estimate")
+    provision.add_argument("--existing-firewall-group-id",
+                           help="Reuse a previously created /32-only group after a partial provisioning attempt")
     mode = provision.add_mutually_exclusive_group()
     mode.add_argument("--dry-run", action="store_true", help="Preview only (the default)")
     mode.add_argument("--apply", action="store_true", help="Create SSH key, firewall, and VM")
@@ -481,12 +532,22 @@ def main(argv: list[str] | None = None) -> int:
         plan = make_plan(api, region=args.region, plan_id=args.plan,
                          admin_source=args.admin_ip, key_path=args.ssh_public_key,
                          max_hours=args.max_hours, max_total_spend=args.max_total_spend)
+        if args.peer_state:
+            if not args.max_total_spend:
+                raise ProvisionError("--peer-state requires --max-total-spend as the aggregate cap")
+            guard_pair_estimate(plan, args.peer_state, args.max_total_spend)
         existing = _existing_key(api, plan)
+        if args.existing_firewall_group_id:
+            _verify_reusable_firewall(api, args.existing_firewall_group_id, plan.admin_ip)
         print_plan(plan, existing)
         if not args.apply:
             print("Dry run: no Vultr resources were created.")
             return 0
-        apply_plan(api, plan, existing)
+        state_path = args.state_file.resolve()
+        if ROOT / "secrets" not in state_path.parents:
+            raise ProvisionError("Provision state file must be under the ignored secrets directory")
+        apply_plan(api, plan, existing, state_path=state_path,
+                   existing_firewall_group_id=args.existing_firewall_group_id)
         return 0
     except ProvisionError as exc:
         print(f"Provisioning stopped: {exc}", file=sys.stderr)

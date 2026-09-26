@@ -124,7 +124,7 @@ class RedGenerator:
     def next(self, round_number: int, *, live: bool = False) -> Scenario:
         episodes = self.bank.list_episodes(limit=500)
         attempted = {entry.get("scenario", {}).get("decoy_family") for entry in episodes
-                     if not live or (entry.get("execution_mode") == "docker" and
+                     if not live or (entry.get("execution_mode") in {"docker", "remote"} and
                                      (entry.get("flag_verifiable") is True or
                                       (entry.get("flag_captured") is True and
                                        entry.get("action_results_verified") is True)))}

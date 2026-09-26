@@ -65,8 +65,10 @@ def execute(action: dict) -> dict:
                 "PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": "/work", "TMPDIR": "/work"
             },
         )
-        return {"exit_code": result.returncode, "stdout": result.stdout[:MAX_OUTPUT],
-                "stderr": result.stderr[:MAX_OUTPUT]}
+        return {"exit_code": result.returncode,
+                "stdout": result.stdout[:MAX_OUTPUT + SCAN_OVERLAP],
+                "stderr": result.stderr[:MAX_OUTPUT + SCAN_OVERLAP],
+                "truncated": (len(result.stdout) > MAX_OUTPUT or len(result.stderr) > MAX_OUTPUT)}
     if kind == "file_read":
         path = _inside(str(payload.get("path", "")), WORK)
         with path.open("rb") as handle:

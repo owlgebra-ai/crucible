@@ -19,7 +19,7 @@ def _tokens(value: str) -> set[str]:
 
 
 def _credible_docker_episode(entry: dict[str, Any]) -> bool:
-    return entry.get("execution_mode") == "docker" and (
+    return entry.get("execution_mode") in {"docker", "remote"} and (
         entry.get("flag_verifiable") is True or
         (entry.get("flag_captured") is True and entry.get("action_results_verified") is True)
     )

@@ -19,6 +19,7 @@ import tempfile
 from typing import Any
 
 from crucible.dashboard import HTML, build_snapshot
+from crucible.experience import ExperienceBank
 
 
 ATTACK_SHAPES = {
@@ -207,13 +208,41 @@ def _dimension(value: object) -> str:
     return DIMENSIONS.get(value, "Policy stack") if isinstance(value, str) else "Policy stack"
 
 
+def _verified_live_counts(db_path: str | Path, limit: int) -> dict[str, int]:
+    """Count episodes with an actual verified worker result, by backend."""
+    counts = {"docker": 0, "remote": 0}
+    path = Path(db_path)
+    if not path.exists():
+        return counts
+    for episode in ExperienceBank(path, read_only=True).list_episodes(limit=limit):
+        mode = episode.get("execution_mode")
+        if (mode not in counts or episode.get("flag_verifiable") is not True or
+                episode.get("action_results_verified") is not True):
+            continue
+        trajectory = episode.get("worker_trajectory")
+        if not isinstance(trajectory, list):
+            continue
+        if any(isinstance(item, dict) and isinstance(item.get("result"), dict) and
+               item["result"].get("verified") is True and
+               type(item["result"].get("exit_code")) is int for item in trajectory):
+            counts[mode] += 1
+    return counts
+
+
 def public_snapshot(private: dict[str, Any]) -> dict[str, Any]:
     """Discard all free-form text, identifiers, payloads, URLs, and raw proof."""
     original = private.get("summary", {})
     if not isinstance(original, dict):
         original = {}
     summary = {field: _bounded_int(original.get(field)) for field in
-               ("total", "simulated", "docker", "unverified_docker")}
+               ("total", "simulated", "docker", "remote")}
+    summary["live"] = summary["docker"] + summary["remote"]
+    # The exporter fills this from inspected episode results, rather than
+    # treating an execution-mode label or summary count as verification.
+    summary["verified_live"] = 0
+    summary["unverified_docker"] = summary["docker"]
+    summary["unverified_remote"] = summary["remote"]
+    summary["unverified_live"] = summary["live"]
     summary.update({field: _rate(original.get(field)) for field in
                     ("attack_rate", "safe_rate", "fixture_rate")})
 
@@ -240,7 +269,7 @@ def public_snapshot(private: dict[str, Any]) -> dict[str, Any]:
             "decision": decision if decision in {"allow", "deny"} else "observed",
             "dimension": _dimension(item.get("dimension")),
             "reason": "",
-            "mode": mode if mode in {"docker", "simulate"} else "unknown",
+            "mode": mode if mode in {"docker", "remote", "simulate"} else "unknown",
             "exit_code": exit_code if type(exit_code) is int and -255 <= exit_code <= 255 else None,
         })
 
@@ -262,7 +291,7 @@ def public_snapshot(private: dict[str, Any]) -> dict[str, Any]:
     if isinstance(latest, dict) and latest.get("text") in APPROVED_REPORTS:
         mode = latest.get("mode")
         report = {"text": latest["text"],
-                  "mode": mode if mode in {"docker", "simulate"} else "unknown",
+                  "mode": mode if mode in {"docker", "remote", "simulate"} else "unknown",
                   "episode_id": "fixed rubric result"}
     return {"summary": summary, "curves": curves, "events": events,
             "patterns": patterns, "latest_report": report, "wall_proof": None}
@@ -281,6 +310,15 @@ def _static_html() -> str:
     page = page.replace("fetch('/api/snapshot'", "fetch('./snapshot.json'")
     page = page.replace("'Updated ' + new Date().toLocaleTimeString()",
                         "'Static snapshot loaded'")
+    page = page.replace("Attack success · Docker", "Attack success · container runs")
+    page = page.replace("Contained + task complete · Docker",
+                        "Contained + task complete · container runs")
+    page = page.replace("cumulative Docker runs", "cumulative container runs")
+    page = page.replace("Only Docker episodes appear in these curves. Simulation completion is reported separately.",
+                        "Same-host Docker and remote sandbox episodes appear in these curves. Simulation completion is separate.")
+    page = page.replace("' Docker episode'", "' container episode'")
+    page = page.replace("A Docker record alone is not proof of a kernel block.",
+                        "An episode record alone is not proof of a kernel block.")
     page = page.replace(
         '  <section class="card chart-card"><h2>Outcome across recorded episodes</h2>',
         '  <section class="card chart-card"><h2>VM wall transcript</h2>\n'
@@ -323,13 +361,20 @@ def _write_atomic(path: Path, data: bytes) -> None:
 
 
 def export(db_path: str | Path, output_dir: str | Path, *, limit: int = 200,
-           require_docker: bool = False, wall_proof_path: str | Path | None = None,
+           require_docker: bool = False, require_live: bool = False,
+           wall_proof_path: str | Path | None = None,
            wall_runtime: str | None = None,
            require_wall_proof: bool = False) -> dict[str, Any]:
     """Create only index.html and snapshot.json in the chosen directory."""
     snapshot = public_snapshot(build_snapshot(db_path, limit=limit))
-    if require_docker and snapshot["summary"]["docker"] == 0:
-        raise ValueError("public Pages source requires at least one Docker episode")
+    verified = _verified_live_counts(db_path, limit)
+    snapshot["summary"]["verified_live"] = verified["docker"] + verified["remote"]
+    snapshot["summary"]["unverified_docker"] = max(0, snapshot["summary"]["docker"] - verified["docker"])
+    snapshot["summary"]["unverified_remote"] = max(0, snapshot["summary"]["remote"] - verified["remote"])
+    snapshot["summary"]["unverified_live"] = (snapshot["summary"]["unverified_docker"] +
+                                               snapshot["summary"]["unverified_remote"])
+    if (require_live or require_docker) and snapshot["summary"]["verified_live"] == 0:
+        raise ValueError("public Pages source requires at least one verified container-backed episode")
     if require_wall_proof and wall_proof_path is None:
         raise ValueError("public Pages source requires a wall proof transcript")
     if wall_proof_path is not None:
@@ -371,7 +416,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", default="dist/public-demo")
     parser.add_argument("--limit", type=int, default=200)
     parser.add_argument("--require-docker", action="store_true",
-                        help="refuse a Pages source containing only simulation")
+                        help="compatibility alias for --require-live")
+    parser.add_argument("--require-live", action="store_true",
+                        help="require a verified Docker or remote sandbox episode")
     parser.add_argument("--wall-proof", help="private prove-wall.sh transcript to summarize")
     parser.add_argument("--wall-runtime", choices=("runc", "runsc-oci"),
                         help="expected runtime for the wall transcript")
@@ -383,12 +430,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         summary = export(args.db, args.output, limit=args.limit,
                          require_docker=args.require_docker,
+                         require_live=args.require_live,
                          wall_proof_path=args.wall_proof,
                          wall_runtime=args.wall_runtime,
                          require_wall_proof=args.require_wall_proof)
     except ValueError as exc:
         parser.exit(2, f"Public export stopped: {exc}\n")
-    print(f"Public snapshot: {summary['docker']} Docker, {summary['simulated']} simulated episodes")
+    print(f"Public snapshot: {summary['docker']} same-host Docker, {summary['remote']} remote sandbox, "
+          f"{summary['simulated']} simulated episodes; {summary['verified_live']} verified container-backed")
     print(f"Files: {Path(args.output) / 'index.html'}, {Path(args.output) / 'snapshot.json'}")
     return 0
 

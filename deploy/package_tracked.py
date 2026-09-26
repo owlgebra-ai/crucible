@@ -65,7 +65,9 @@ def allowed(name: str) -> bool:
         return len(path.parts) == 2 and path.name in {
             "policy_plugin.mjs", "smoke.patch.yml", "worker.patch.yml"
         }
-    return name == "deploy/bootstrap-vm.sh"
+    return name in {"deploy/bootstrap-vm.sh", "deploy/bootstrap-control-vm.sh",
+                    "deploy/bootstrap-sandbox-vm.sh",
+                    "deploy/remote-worker-gateway.py", "deploy/authorize-control-key.sh"}
 
 
 def package(root: Path, output: Path) -> str:

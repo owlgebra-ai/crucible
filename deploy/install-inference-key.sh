@@ -3,13 +3,14 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: deploy/install-inference-key.sh --target user@host [--identity key] [--port 22] [--env-file .env.local] --apply" >&2
+  echo "usage: deploy/install-inference-key.sh --target user@host [--identity key] [--known-hosts file] [--port 22] [--env-file .env.local] --apply" >&2
   exit 2
 }
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TARGET=""
 IDENTITY=""
+KNOWN_HOSTS=""
 PORT=22
 ENV_FILE="$ROOT/.env.local"
 APPLY=0
@@ -17,6 +18,7 @@ while (($#)); do
   case "$1" in
     --target) (($# >= 2)) || usage; TARGET="$2"; shift 2 ;;
     --identity) (($# >= 2)) || usage; IDENTITY="$2"; shift 2 ;;
+    --known-hosts) (($# >= 2)) || usage; KNOWN_HOSTS="$2"; shift 2 ;;
     --port) (($# >= 2)) || usage; PORT="$2"; shift 2 ;;
     --env-file) (($# >= 2)) || usage; ENV_FILE="$2"; shift 2 ;;
     --apply) APPLY=1; shift ;;
@@ -27,6 +29,9 @@ done
 [[ "$TARGET" =~ ^[a-zA-Z_][a-zA-Z0-9_.-]*@([a-zA-Z0-9][a-zA-Z0-9.-]*|\[[0-9a-fA-F:]+\])$ ]] || usage
 [[ "$PORT" =~ ^[0-9]{1,5}$ ]] && ((PORT >= 1 && PORT <= 65535)) || usage
 [[ -z "$IDENTITY" || -f "$IDENTITY" ]] || usage
+if [[ -n "$KNOWN_HOSTS" ]]; then
+  [[ -f "$KNOWN_HOSTS" && ! -L "$KNOWN_HOSTS" && -s "$KNOWN_HOSTS" ]] || usage
+fi
 for binary in python3 ssh mktemp; do
   command -v "$binary" >/dev/null || { echo "missing $binary" >&2; exit 77; }
 done
@@ -74,6 +79,10 @@ EXPECTED_BYTES="$(wc -c < "$TMP_DIR/inference.env" | tr -d '[:space:]')"
 SSH_OPTS=(-o BatchMode=yes -o StrictHostKeyChecking=yes -p "$PORT")
 if [[ -n "$IDENTITY" ]]; then
   SSH_OPTS+=(-i "$IDENTITY")
+fi
+if [[ -n "$KNOWN_HOSTS" ]]; then
+  SSH_OPTS+=(-F /dev/null -o "UserKnownHostsFile=$KNOWN_HOSTS" \
+             -o GlobalKnownHostsFile=/dev/null -o UpdateHostKeys=no -o ProxyCommand=none)
 fi
 REMOTE_INSTALL="$(cat <<'REMOTE'
 sudo -n install -d -m 0700 /etc/crucible && sudo -n sh -c 'set -eu; umask 077; tmp=$(mktemp /etc/crucible/.inference.XXXXXX); trap "rm -f \"$tmp\"" EXIT; cat > "$tmp"; [ "$(wc -c < "$tmp")" -eq __EXPECTED_BYTES__ ]; chmod 0600 "$tmp"; mv -f "$tmp" /etc/crucible/inference.env; trap - EXIT'

@@ -26,6 +26,7 @@ class FakeAPI:
                         "hourly_cost": self.hourly, "monthly_cost": 20}],
             "/os": [{"id": 2284, "name": vm.UBUNTU_NAME}],
             "/ssh-keys": [],
+            "/instances": [],
         }[path]
 
     def request(self, method: str, path: str, payload: dict | None = None):
@@ -44,6 +45,9 @@ class FakeAPI:
                 "subnet": "8.8.8.8" if self.firewall_correct else "0.0.0.0",
                 "subnet_size": 32 if self.firewall_correct else 0, "source": "",
             }]}
+        if method == "GET" and path == "/firewalls/group-1234":
+            return {"firewall_group": {"id": "group-1234",
+                    "description": "crucible SSH 8.8.8.8/32"}}
         if method == "POST" and path == "/instances":
             return {"instance": {"id": "instance-1234"}}
         if method == "GET" and path == "/instances/instance-1234":
@@ -91,6 +95,36 @@ class ProvisionTests(unittest.TestCase):
         plan = self.plan(FakeAPI(), max_hours=None, max_total_spend="0.10")
         self.assertEqual(plan.hours, 3)
 
+    def test_two_vm_aggregate_estimate_is_checked_before_apply(self):
+        root = Path(self.temp.name).resolve()
+        secrets = root / "secrets"
+        secrets.mkdir(mode=0o700)
+        peer = secrets / "control.json"
+        peer.write_text(json.dumps({"instance_id": "instance-control", "region": "lax",
+                                    "estimated_compute_usd": "0.72"}))
+        peer.chmod(0o600)
+        plan = self.plan(FakeAPI())
+        with patch.object(vm, "ROOT", root):
+            self.assertEqual(str(vm.guard_pair_estimate(plan, peer, "1.44")), "1.44")
+            with self.assertRaisesRegex(vm.ProvisionError, "aggregate cap"):
+                vm.guard_pair_estimate(plan, peer, "1.43")
+
+    def test_management_client_supports_narrow_delete_request(self):
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *_args): return False
+            def read(self, *_args): return b""
+        class Opener:
+            def __init__(self): self.method = None
+            def open(self, request, timeout):
+                self.method = request.get_method()
+                return Response()
+        client = vm.VultrManagement("test-key")
+        opener = Opener()
+        client._opener = opener
+        self.assertEqual(client.request("DELETE", "/firewalls/group-1234/rules/1"), {})
+        self.assertEqual(opener.method, "DELETE")
+
     def test_apply_attaches_verified_firewall_and_key_before_vm_create(self):
         api = FakeAPI()
         plan = self.plan(api)
@@ -117,6 +151,34 @@ class ProvisionTests(unittest.TestCase):
             vm.apply_plan(api, self.plan(api), None,
                           state_path=Path(self.temp.name) / "state.json", poll_seconds=1)
         self.assertNotIn(("POST", "/instances"), [(method, path) for method, path, _ in api.calls])
+
+    def test_vultr_normalized_source_cidr_is_verified(self):
+        class ObservedRuleApi:
+            def request(self, method, path):
+                return {"firewall_rules": [{"id": 1, "type": "v4", "ip_type": "v4",
+                    "action": "accept", "protocol": "tcp", "port": "22",
+                    "subnet": "12.94.170.82", "subnet_size": 32,
+                    "source": "12.94.170.82/32", "direction": "in"}]}
+        vm._verify_firewall(ObservedRuleApi(), "group-1234", "12.94.170.82")
+
+    def test_reuse_requires_unattached_matching_group_and_skips_group_creation(self):
+        api = FakeAPI()
+        state = Path(self.temp.name) / "reuse.json"
+        vm.apply_plan(api, self.plan(api), "key-1234", state_path=state, poll_seconds=1,
+                      existing_firewall_group_id="group-1234")
+        posts = [path for method, path, _ in api.calls if method == "POST"]
+        self.assertEqual(posts, ["/instances"])
+        class AttachedApi(FakeAPI):
+            def list_all(self, path, field):
+                if path == "/instances":
+                    return [{"id": "another-vm", "firewall_group_id": "group-1234"}]
+                return super().list_all(path, field)
+        attached = AttachedApi()
+        with self.assertRaisesRegex(vm.ProvisionError, "already attached"):
+            vm.apply_plan(attached, self.plan(attached), "key-1234",
+                          state_path=Path(self.temp.name) / "other.json", poll_seconds=1,
+                          existing_firewall_group_id="group-1234")
+        self.assertTrue(all(method == "GET" for method, _, _ in attached.calls))
 
     def test_existing_state_stops_before_any_mutation(self):
         api = FakeAPI()

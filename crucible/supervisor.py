@@ -29,13 +29,13 @@ from crucible.scenarios import CANARY, RedGenerator, Scenario
 @dataclass(frozen=True)
 class RunConfig:
     mode: str = "offline"  # offline fixtures or authenticated Vultr model
-    execution: str = "docker"  # docker or explicitly labelled simulation
+    execution: str = "docker"  # docker, remote sandbox VM, or labelled simulation
     allowed_hosts: tuple[str, ...] = ("pypi.org", "files.pythonhosted.org", "registry.npmjs.org")
     start_with_egress_plugin: bool = False
     enable_classifier: bool = True
 
     def __post_init__(self) -> None:
-        if self.mode not in {"offline", "vultr"} or self.execution not in {"docker", "simulate"}:
+        if self.mode not in {"offline", "vultr"} or self.execution not in {"docker", "remote", "simulate"}:
             raise ValueError("invalid run mode")
 
 
@@ -45,6 +45,11 @@ class Supervisor:
         self.config = config
         if config.execution == "docker" and (platform.system() != "Linux" or os.geteuid() != 0):
             raise RuntimeError("Docker execution requires root on the Linux sandbox host; use --execution simulate for local flow tests")
+        self.remote = None
+        self._remote_episodes: dict[str, str] = {}
+        if config.execution == "remote":
+            from crucible.remote import RemoteConfig, RemoteWorkerClient
+            self.remote = RemoteWorkerClient(RemoteConfig.from_env())
         self.scanner = OutputFilterPlugin((CANARY,))
         self.bank = ExperienceBank(self.root / "data" / "experience.sqlite", self.scanner)
         self.registry = PluginRegistry()
@@ -54,7 +59,7 @@ class Supervisor:
         if config.enable_classifier and config.mode == "vultr":
             self.registry.mount(SemanticClassifierPlugin(self.scanner))
         self.registry.mount(ShellGatePlugin())
-        policy_dir = "written_policies_docker" if config.execution == "docker" else "written_policies_simulated"
+        policy_dir = "written_policies_docker" if config.execution in {"docker", "remote"} else "written_policies_simulated"
         self.evolver = BlueEvolver(self.registry, self.scanner, self.root / "data" / policy_dir,
                                    set(config.allowed_hosts), config.mode == "vultr" and config.enable_classifier,
                                    use_model=config.mode == "vultr", bank=self.bank)
@@ -105,7 +110,7 @@ class Supervisor:
 
     def _final_report(self, scenario: Scenario, tool_result: dict[str, Any]) -> tuple[str, bool, str]:
         if self.config.mode == "offline":
-            if self.config.execution == "docker":
+            if self.config.execution in {"docker", "remote"}:
                 return "", False, "offline_fixture_not_scored"
             claim = scenario.fixture_claim()
             source = "fixture"
@@ -136,6 +141,14 @@ class Supervisor:
                              "VULTR_API_KEY", "CRUCIBLE_ENV_FILE"}}
 
     def _create_session(self, scenario_dir: Path, episode_id: str) -> str:
+        if self.remote is not None:
+            try:
+                cid = self.remote.create(scenario_dir, episode_id)
+            except Exception:
+                self.remote.cleanup(episode_id)
+                raise
+            self._remote_episodes[cid] = episode_id
+            return cid
         process = subprocess.Popen([str(self.root / "infra" / "create-worker.sh"), str(scenario_dir)],
                                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                    text=True, errors="replace", start_new_session=True,
@@ -161,6 +174,8 @@ class Supervisor:
     def _cleanup_episode(self, episode_id: str) -> bool:
         if not re.fullmatch(r"ep_[a-f0-9]{12}", episode_id):
             return False
+        if self.remote is not None:
+            return self.remote.cleanup(episode_id)
         command = ["docker", "ps", "-aq", "--filter", f"label=crucible.episode={episode_id}"]
         try:
             listing = subprocess.run(command, capture_output=True, text=True, timeout=20,
@@ -181,6 +196,9 @@ class Supervisor:
             return False
 
     def _destroy_session(self, container_id: str) -> bool:
+        if self.remote is not None:
+            episode_id = self._remote_episodes.pop(container_id, "")
+            return self.remote.destroy(container_id, episode_id)
         try:
             result = subprocess.run([str(self.root / "infra" / "destroy-worker.sh"), container_id],
                                     capture_output=True, text=True, errors="replace", timeout=30,
@@ -203,6 +221,15 @@ class Supervisor:
             return self._sanitize_result(raw, verified=False)
         if not container_id:
             return {"exit_code": 1, "stdout": "", "stderr": "worker session unavailable", "verified": False}
+        if self.remote is not None:
+            from crucible.remote import RemoteError
+            episode_id = self._remote_episodes.get(container_id, "")
+            try:
+                raw = self.remote.execute(container_id, episode_id,
+                                          {"kind": action.kind, "payload": action.payload})
+            except RemoteError:
+                return {"exit_code": 1, "stdout": "", "stderr": "remote worker unavailable", "verified": False}
+            return self._sanitize_result(raw, verified=True)
         runner = self.root / "infra" / "exec-worker.sh"
         # No model key or management key is given to Docker. The runner also forbids
         # forwarding the host environment into the worker container.
@@ -236,6 +263,9 @@ class Supervisor:
             clean, count = self.scanner.redact(str(raw.get(field, ""))[:32_768])
             safe[field] = clean
             redactions += count
+        remote_redactions = raw.get("redactions", 0)
+        if verified and type(remote_redactions) is int and 0 <= remote_redactions <= 1000:
+            redactions += remote_redactions
         safe["redactions"] = redactions
         if redactions:
             safe["output_blocked"] = True
@@ -251,7 +281,7 @@ class Supervisor:
                                  "reason": evaluation.final.reason, "checks": checks}
         if evaluation.final.decision == "deny":
             event["result"] = {"exit_code": None, "stdout": "", "stderr": "pre-exec denied",
-                               "verified": self.config.execution == "docker"}
+                               "verified": self.config.execution in {"docker", "remote"}}
         else:
             event["result"] = self._dispatch(scenario_dir, action, container_id)
         return event
@@ -260,7 +290,7 @@ class Supervisor:
         episode_id = "ep_" + uuid4().hex[:12]
         with tempfile.TemporaryDirectory(prefix="crucible-episode-") as temp:
             scenario_dir = scenario.materialize(Path(temp) / "scenario")
-            container_id = self._create_session(scenario_dir, episode_id) if self.config.execution == "docker" else None
+            container_id = self._create_session(scenario_dir, episode_id) if self.config.execution in {"docker", "remote"} else None
             destroyed = container_id is None
             try:
                 record = self._run_in_session(scenario, scenario_dir, episode_id, container_id, adapt)
