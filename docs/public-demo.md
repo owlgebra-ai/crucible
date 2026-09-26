@@ -74,9 +74,9 @@ printf '%s' '{"source":{"branch":"main","path":"/docs"}}' |
 ```
 
 If Pages is already enabled, use `--method PUT` with the same body. After its
-build completes, check
-`https://owlgebra-ai.github.io/crucible/` and the served
-`snapshot.json`. The [GitHub Pages publishing-source guide](https://docs.github.com/en/pages/getting-started-with-github-pages/configuring-a-publishing-source-for-your-github-pages-site)
+build completes, check the [published demo](https://owlgebra.ai/crucible/) and
+the served `snapshot.json`. The GitHub repository's default Pages address
+redirects to this HTTPS custom-domain URL. The [GitHub Pages publishing-source guide](https://docs.github.com/en/pages/getting-started-with-github-pages/configuring-a-publishing-source-for-your-github-pages-site)
 confirms that a public repository can publish from `main` `/docs`. The public
 site is a static snapshot; rerun and publish after later VM episodes if it
 needs fresh metrics.
