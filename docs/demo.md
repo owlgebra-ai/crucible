@@ -21,6 +21,11 @@ root-readable `/etc/crucible/inference.env`; the deployment archive excludes
 it and the sandbox VM never receives it. Set a VM spend limit and teardown
 time before provisioning. Do not show the key file in the recording.
 
+The [60-second public evidence walkthrough](demo.mp4) is rendered from the
+closed-schema snapshot. It includes a redacted excerpt of the saved wall proof;
+it is not raw VM screen footage. The saved private transcript supports a
+separate auditor replay.
+
 ## Reproduce the two-VM evidence sequence
 
 1. On the sandbox VM, run `sudo bash /opt/crucible/current/infra/prove-wall.sh`

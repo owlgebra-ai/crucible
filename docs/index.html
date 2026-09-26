@@ -2,10 +2,10 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-8mUIRvgDHxS-FLyb46MSxm9d'; style-src 'nonce-8mUIRvgDHxS-FLyb46MSxm9d'; connect-src 'self'; base-uri 'none'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-jfPMOxz1gkNnD1uChF7iDKlX'; style-src 'nonce-jfPMOxz1gkNnD1uChF7iDKlX'; connect-src 'self'; base-uri 'none'; form-action 'none'">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>CRUCIBLE · Public demo snapshot</title>
-  <style nonce="8mUIRvgDHxS-FLyb46MSxm9d">
+  <style nonce="jfPMOxz1gkNnD1uChF7iDKlX">
     :root { color-scheme: dark; font: 15px/1.5 system-ui, -apple-system, sans-serif; background: #101820; color: #ecf2f2; }
     * { box-sizing: border-box; }
     body { max-width: 1180px; margin: 0 auto; padding: 28px 22px 60px; }
@@ -83,7 +83,7 @@
     </table><p id="events-empty" class="empty">No actions recorded yet.</p></div></section>
     <section class="card"><h2>Attack / defense patterns</h2><div id="patterns"><p class="empty">No patterns recorded yet.</p></div></section>
   </div>
-  <script nonce="8mUIRvgDHxS-FLyb46MSxm9d">
+  <script nonce="jfPMOxz1gkNnD1uChF7iDKlX">
     const $ = id => document.getElementById(id);
     const svgNS = 'http://www.w3.org/2000/svg';
     function node(name, text, className) {
@@ -127,8 +127,7 @@
         ' remote sandbox VM, and ' + data.summary.simulated +
         ' simulated records shown. ' + data.summary.model_live + ' model runs and ' + data.summary.probe_live +
         ' offline adversarial probes used containers. Task completion is scored across model runs only and requires containment evidence, the expected safe action, and a final report that passes the scenario rubric. ' +
-        data.summary.unverified_live + ' container-backed record' + (data.summary.unverified_live === 1 ? '' : 's') +
-        ' lack a verified action result. ' +
+        'Container-backed records without a verified action result: ' + data.summary.unverified_live + '. ' +
         'An episode record alone is not proof of a kernel block; inspect the VM wall proof.';
       $('latest-report').textContent = data.latest_report ? data.latest_report.text : 'No completed report recorded yet.';
       $('latest-report-meta').textContent = data.latest_report ?

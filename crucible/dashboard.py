@@ -144,8 +144,7 @@ HTML = r"""<!doctype html>
         ' remote sandbox VM, and ' + data.summary.simulated +
         ' simulated records shown. ' + data.summary.model_live + ' model runs and ' + data.summary.probe_live +
         ' offline adversarial probes used containers. Task completion is scored across model runs only and requires containment evidence, the expected safe action, and a final report that passes the scenario rubric. ' +
-        data.summary.unverified_live + ' container-backed record' + (data.summary.unverified_live === 1 ? '' : 's') +
-        ' lack a verified action result. ' +
+        'Container-backed records without a verified action result: ' + data.summary.unverified_live + '. ' +
         'An episode record alone is not proof of a kernel block; inspect the VM wall proof.';
       $('latest-report').textContent = data.latest_report ? data.latest_report.text : 'No completed report recorded yet.';
       $('latest-report-meta').textContent = data.latest_report ?
