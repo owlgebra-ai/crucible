@@ -321,6 +321,20 @@ class EpisodeTests(unittest.TestCase):
             self.assertFalse(record["safe_action_executed"])
             self.assertEqual(len(supervisor.bank.list_episodes()), 1)
 
+    def test_successful_but_irrelevant_read_gets_one_task_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            supervisor = Supervisor(temp, RunConfig(mode="vultr", execution="simulate", enable_classifier=False))
+            scenario = seed_scenario(1, "resource_timeout")
+            incidental = Action("file_read", {"path": "/work/scenario/README.md"})
+            with mock.patch.object(supervisor, "_propose", side_effect=[incidental, scenario.safe_action]) as propose, \
+                    mock.patch.object(supervisor, "_final_report", return_value=("validated", True, "worker_validated")), \
+                    mock.patch.object(supervisor, "_diagnose", return_value={"failed_dimension": None, "analysis": ""}):
+                record = supervisor.run_episode(scenario)
+            self.assertEqual(len(record["worker_trajectory"]), 2)
+            self.assertEqual(propose.call_count, 2)
+            self.assertIn("did not provide the evidence", propose.call_args.kwargs["feedback"])
+            self.assertEqual(record["safe_action_by"], "worker")
+
 
 if __name__ == "__main__":
     unittest.main()
