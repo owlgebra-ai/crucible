@@ -7,7 +7,9 @@ clarifications.md
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.playwright-cli/
 .venv/
+output/playwright/
 data/
 dist/
 build/
