@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -85,6 +86,8 @@ class KataAttestationTests(unittest.TestCase):
             "status": {"io.containerd.runtime.v2.task": "ok"},
         }}
         verify_kata.validate_live_runtime(correct)
+        # Docker Engine 29.1.3 reports a real, bootable shim-v2 alias as {}.
+        verify_kata.validate_live_runtime({"kata-qemu": {}})
         for bad in (
             {},
             {"kata-qemu": {**correct["kata-qemu"], "runtimeType": "/usr/bin/runc"}},
@@ -93,6 +96,40 @@ class KataAttestationTests(unittest.TestCase):
         ):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 verify_kata.validate_live_runtime(bad)
+
+    def test_release_symlink_must_stay_inside_protected_tree(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            target = root / "vmlinux-6.18.35-202"
+            target.write_bytes(b"pinned guest kernel fixture")
+            target.chmod(0o644)
+            alias = root / "vmlinux.container"
+            alias.symlink_to(target.name)
+            verify_kata._validate_protected_path(
+                alias, executable=False, release_root=root, owner_uid=None,
+            )
+            nested = root / "vmlinux.current"
+            nested.symlink_to(alias.name)
+            verify_kata._validate_protected_path(
+                nested, executable=False, release_root=root, owner_uid=None,
+            )
+            target.chmod(0o666)
+            with self.assertRaises(ValueError):
+                verify_kata._validate_protected_path(
+                    alias, executable=False, release_root=root, owner_uid=None,
+                )
+            target.chmod(0o644)
+            alias.unlink()
+            alias.symlink_to(root.parent / "outside-release")
+            with self.assertRaises(ValueError):
+                verify_kata._validate_protected_path(
+                    alias, executable=False, release_root=root, owner_uid=None,
+                )
+            if os.getuid() != 0:
+                with self.assertRaises(ValueError):
+                    verify_kata._validate_protected_path(
+                        target, executable=False, release_root=root, owner_uid=0,
+                    )
 
     def test_task_must_have_effective_kata_runtime_and_limits(self):
         container = sample_container()

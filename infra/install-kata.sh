@@ -41,11 +41,6 @@ if not re.search(r'\b(vmx|svm)\b', Path('/proc/cpuinfo').read_text()):
 with open('/dev/kvm', 'rb+'):
     pass
 PY
-if ! command -v zstd >/dev/null; then
-  apt-get update
-  DEBIAN_FRONTEND=noninteractive apt-get install -y zstd
-fi
-
 KATA_VERSION=4.2.0
 case "$(dpkg --print-architecture)" in
   amd64)
@@ -58,8 +53,11 @@ case "$(dpkg --print-architecture)" in
 esac
 
 if [[ -e /opt/kata ]]; then
+  # A failed post-install attestation may leave the already-registered release
+  # in place. Resume only if every asset, config, daemon alias, and loaded
+  # runtime still matches the pinned manifest; never overwrite partial state.
   if python3 "$INFRA_DIR/verify-kata.py" --quiet; then
-    echo "Pinned Kata QEMU runtime is already installed and verified"
+    echo "Pinned Kata QEMU runtime is installed and verified; no repair needed"
     exit 0
   fi
   echo "an unverified /opt/kata already exists; refusing to overwrite it" >&2
@@ -68,6 +66,10 @@ fi
 if [[ -e /etc/crucible/kata-qemu.toml || -e /etc/crucible/kata-install.json ]]; then
   echo "an unverified Kata configuration already exists; refusing to overwrite it" >&2
   exit 77
+fi
+if ! command -v zstd >/dev/null; then
+  apt-get update
+  DEBIAN_FRONTEND=noninteractive apt-get install -y zstd
 fi
 
 DEFAULT_BEFORE="$(docker info --format '{{.DefaultRuntime}}')"

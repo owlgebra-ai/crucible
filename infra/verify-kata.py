@@ -41,18 +41,52 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def require_root_owned(path: Path, *, executable: bool = False) -> None:
-    for candidate in (path, *path.parents):
-        if candidate.is_symlink():
-            raise ValueError(f"symlink is not an attested runtime path: {candidate}")
-        details = candidate.stat()
-        if details.st_uid != 0 or details.st_mode & 0o022:
-            raise ValueError(f"runtime path is not root-owned and protected: {candidate}")
-    details = path.stat()
+def _validate_protected_path(
+    path: Path, *, executable: bool, release_root: Path | None, owner_uid: int | None,
+) -> None:
+    """Check every lexical path and symlink target before following a link."""
+    if not path.is_absolute() or Path(os.path.normpath(str(path))) != path:
+        raise ValueError(f"runtime path is not canonical: {path}")
+    if release_root is not None and not path.is_relative_to(release_root):
+        raise ValueError(f"runtime asset escapes the pinned release: {path}")
+    pending = [path]
+    visited: set[Path] = set()
+    while pending:
+        current = pending.pop()
+        for candidate in (current, *current.parents):
+            if candidate in visited:
+                continue
+            visited.add(candidate)
+            details = candidate.lstat()
+            if owner_uid is not None and details.st_uid != owner_uid:
+                raise ValueError(f"runtime path is not root-owned: {candidate}")
+            if stat.S_ISLNK(details.st_mode):
+                if release_root is None or not candidate.is_relative_to(release_root):
+                    raise ValueError(f"symlink is not an attested runtime path: {candidate}")
+                link = Path(os.readlink(candidate))
+                target = link if link.is_absolute() else candidate.parent / link
+                target = Path(os.path.normpath(str(target)))
+                if not target.is_relative_to(release_root):
+                    raise ValueError(f"runtime asset symlink escapes the pinned release: {candidate}")
+                pending.append(target)
+            elif details.st_mode & 0o022:
+                raise ValueError(f"runtime path is writable by another user: {candidate}")
+    resolved = path.resolve(strict=True)
+    if release_root is not None and not resolved.is_relative_to(release_root):
+        raise ValueError(f"runtime asset resolves outside the pinned release: {path}")
+    details = resolved.stat()
     if not stat.S_ISREG(details.st_mode):
         raise ValueError(f"runtime path is not a regular file: {path}")
     if executable and not details.st_mode & stat.S_IXUSR:
         raise ValueError(f"runtime path is not executable: {path}")
+
+
+def require_root_owned(path: Path, *, executable: bool = False, release_asset: bool = False) -> None:
+    _validate_protected_path(
+        path, executable=executable,
+        release_root=Path("/opt/kata") if release_asset else None,
+        owner_uid=0,
+    )
 
 
 def validate_docker_config(data: object) -> None:
@@ -69,12 +103,17 @@ def validate_docker_config(data: object) -> None:
 
 
 def validate_live_runtime(runtimes: object) -> None:
-    """Check the daemon's loaded alias, not only its on-disk configuration."""
+    """Check the daemon loaded the alias; Engine 29 reports shim-v2 as {}."""
     if not isinstance(runtimes, dict):
         raise ValueError("Docker did not report runtime configuration")
     entry = runtimes.get(RUNTIME)
     if not isinstance(entry, dict):
         raise ValueError("Docker has not loaded the kata-qemu runtime alias")
+    if entry == {}:
+        # Docker Engine 29.1.3 reports a configured shim-v2 alias as an empty
+        # object via both `docker info` and the /info API. The protected daemon
+        # file and the actual per-task pinned KVM/QEMU process are checked too.
+        return
     if (entry.get("runtimeType") != str(SHIM) or
             entry.get("options") != {"ConfigPath": str(CONFIG)} or
             entry.get("path") or entry.get("runtimeArgs")):
@@ -220,7 +259,7 @@ def verify_install() -> tuple[Path, str]:
     config_data = tomllib.loads(CONFIG.read_text())
     assets = validate_kata_config(config_data)
     for name, path in assets.items():
-        require_root_owned(path, executable=name in ("qemu_sha256", "virtiofsd_sha256"))
+        require_root_owned(path, executable=name in ("qemu_sha256", "virtiofsd_sha256"), release_asset=True)
         if sha256(path) != manifest.get(name):
             raise ValueError(f"Kata {name} differs from the verified release")
     validate_docker_config(json.loads(DAEMON.read_text()))
