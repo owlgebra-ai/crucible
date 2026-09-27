@@ -81,6 +81,8 @@ Environment=CRUCIBLE_REMOTE_KNOWN_HOSTS=/etc/crucible/worker_known_hosts
 ExecStart=/usr/bin/python3 -m crucible.task_broker --socket /run/crucible-task/task.sock --db /var/lib/crucible/data/experience.sqlite
 Restart=on-failure
 RestartSec=2
+KillMode=mixed
+TimeoutStopSec=120
 RuntimeDirectory=crucible-task
 RuntimeDirectoryMode=0750
 UMask=0007
