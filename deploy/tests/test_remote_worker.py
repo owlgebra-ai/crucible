@@ -248,7 +248,8 @@ class GatewayTests(unittest.TestCase):
     def test_firewall_trace_is_removed_even_if_worker_fails(self) -> None:
         cid = "b" * 64
         episode = "ep_" + "a" * 12
-        forward = "-A DOCKER-USER -i br-crucible -s 172.30.80.0/24 -j CRUCIBLE_EGRESS"
+        # `iptables -S` normalizes source before interface on the live VM.
+        forward = "-A DOCKER-USER -s 172.30.80.0/24 -i br-crucible -j CRUCIBLE_EGRESS"
         egress = ["-A CRUCIBLE_EGRESS -d 1.2.3.4/32 -p tcp --dport 443 -j ACCEPT",
                   "-A CRUCIBLE_EGRESS -j DROP"]
         def rules(chain):

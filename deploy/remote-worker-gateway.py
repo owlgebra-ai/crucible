@@ -251,7 +251,13 @@ def _probe_firewall_trace(cid: str, episode_id: str, host: str):
     """Measure only this guest's SYNs while preserving the kernel verdict."""
     source, subnet, bridge = _probe_source_ip(cid)
     forward = next((row for row in _firewall_rules("DOCKER-USER") if row.startswith("-A ")), "")
-    if forward != f"-A DOCKER-USER -i {bridge} -s {subnet} -j {EGRESS_CHAIN}":
+    # iptables may normalize option ordering when it renders `-S` (for
+    # example, `-s` before `-i`), so compare the exact rule semantics.
+    parts = shlex.split(forward)
+    pairs = dict(zip(parts[2::2], parts[3::2]))
+    if (len(parts) != 8 or parts[:2] != ["-A", "DOCKER-USER"]
+            or len(pairs) != 3 or pairs != {"-i": bridge, "-s": subnet,
+                                               "-j": EGRESS_CHAIN}):
         raise ValueError("worker firewall is not first in forwarding path")
     active = [row for row in _firewall_rules(EGRESS_CHAIN) if row.startswith(f"-A {EGRESS_CHAIN} ")]
     if not active or active[-1] != f"-A {EGRESS_CHAIN} -j DROP":
