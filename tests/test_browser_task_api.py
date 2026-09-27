@@ -166,6 +166,19 @@ class BrokerTaskTests(unittest.TestCase):
         self.assertFalse(ended["proof_complete"])
         self.assertEqual(TrajectoryStore(self.db, read_only=True).snapshot()["status"], "failed")
 
+    def test_successful_child_cannot_claim_proof_when_completion_is_not_persisted(self) -> None:
+        command = [sys.executable, "-c", "raise SystemExit(0)"]
+        with mock.patch("crucible.task_broker._child_environment", return_value={"PATH": "/usr/bin:/bin"}), \
+             mock.patch("crucible.task_broker._command", return_value=(command, 5)), \
+             mock.patch.object(TrajectoryStore, "finish_task", side_effect=sqlite3.OperationalError("disk full")):
+            manager = TaskManager(self.db, deploy_lock=self.lock)
+            manager.start("readiness_evolution")
+            ended = self._await_end(manager)
+        self.assertEqual(ended["status"], "failed")
+        self.assertFalse(ended["proof_complete"])
+        self.assertFalse(ended["task_completed"])
+        self.assertTrue(TrajectoryStore(self.db, read_only=True).snapshot()["active"])
+
     def test_timeout_uses_graceful_signal_before_force_kill(self) -> None:
         ready = Path(self.temp.name) / "ready"
         cleaned = Path(self.temp.name) / "cleaned"

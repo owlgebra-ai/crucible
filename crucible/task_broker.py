@@ -224,15 +224,21 @@ class TaskManager:
                 except Exception:
                     pass
         finally:
+            persisted = False
             try:
                 if store is None:
                     store = TrajectoryStore(self.db_path)
                 store.finish_task(task_id, "complete" if succeeded else "failed")
+                persisted = True
+            except Exception:
+                # A child exit code alone is not proof. If the shared bank
+                # cannot record completion, the browser must report failure.
+                succeeded = False
             finally:
                 with self._lock:
                     self._process = None
                     if self._job is not None and self._job["task_id"] == task_id:
-                        self._job["status"] = "complete" if succeeded else "failed"
+                        self._job["status"] = "complete" if succeeded and persisted else "failed"
                         self._job["proof_complete"] = (succeeded if case == "readiness_evolution" else None)
                         self._job["task_completed"] = (succeeded if case == "safe_demo" else None)
                         self._job["finished_at"] = _timestamp()
