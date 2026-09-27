@@ -146,7 +146,38 @@ cleanup() {
 trap cleanup EXIT
 install -d -m 0755 /opt/crucible/releases
 command -v flock >/dev/null || { echo "flock is required for serialized deployment" >&2; exit 77; }
-exec 9>/var/lock/crucible-deploy.lock
+# /var/lock can resolve to a sticky, world-writable directory. Create or
+# validate the lock without following links before Bash opens the root-owned
+# inode; opening it read/write below also avoids truncating it.
+python3 - <<'PY'
+import os
+import stat
+
+parent = "/var/lock"
+directory = os.stat(parent)
+if (not stat.S_ISDIR(directory.st_mode) or directory.st_uid != 0 or
+        ((directory.st_mode & 0o022) and not (directory.st_mode & stat.S_ISVTX))):
+    raise SystemExit("unsafe deployment lock directory")
+path = parent + "/crucible-deploy.lock"
+fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+try:
+    info = os.fstat(fd)
+    if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or
+            info.st_nlink != 1 or info.st_mode & 0o022):
+        raise SystemExit("unsafe deployment lock")
+    os.fchmod(fd, 0o600)
+finally:
+    os.close(fd)
+PY
+exec 9<>/var/lock/crucible-deploy.lock
+python3 - <<'PY'
+import os
+import stat
+info = os.fstat(9)
+if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or
+        info.st_nlink != 1 or stat.S_IMODE(info.st_mode) != 0o600):
+    raise SystemExit("deployment lock changed before flock")
+PY
 flock -n 9 || { echo "another CRUCIBLE deployment is active" >&2; exit 75; }
 if [[ -e "$RELEASE" || -L "$RELEASE" ]]; then
   [[ -d "$RELEASE" && ! -L "$RELEASE" ]] || {
