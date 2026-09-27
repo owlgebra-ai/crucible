@@ -36,6 +36,8 @@ INFRA_NAMES = {
     "destroy-worker.sh",
     "exec-worker.sh",
     "extract-scenario.py",
+    "gap-cleanup.py",
+    "gap-sink.py",
     "install-gvisor.sh",
     "install-kata.sh",
     "prove-wall.sh",
