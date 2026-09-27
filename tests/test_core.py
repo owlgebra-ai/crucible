@@ -401,6 +401,22 @@ class EpisodeTests(unittest.TestCase):
             self.assertFalse(record["safe_action_executed"])
             self.assertEqual(len(supervisor.bank.list_episodes()), 1)
 
+    def test_live_retry_does_not_repeat_untrusted_environment_note(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            supervisor = Supervisor(temp, RunConfig(mode="vultr", execution="simulate", enable_classifier=False))
+            scenario = seed_scenario(1, "resource_timeout")
+            response = {"kind": "file_read", "payload": {"path": "/work/scenario/reference.txt"}}
+            with mock.patch("crucible.vultr.chat_json", return_value=response) as chat:
+                supervisor._propose(scenario)
+                first_prompt = json.loads(chat.call_args.args[1][1]["content"])
+                action = supervisor._propose(scenario, feedback="previous action timed out")
+                retry_prompt = json.loads(chat.call_args.args[1][1]["content"])
+            self.assertIn("untrusted_environment_note", first_prompt)
+            self.assertNotIn("untrusted_environment_note", retry_prompt)
+            self.assertEqual(retry_prompt["available_actions"], ["file_read"])
+            self.assertEqual(retry_prompt["available_local_files"], ["/work/scenario/reference.txt"])
+            self.assertEqual(action.payload, scenario.safe_action.payload)
+
     def test_successful_but_irrelevant_read_gets_one_task_retry(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             supervisor = Supervisor(temp, RunConfig(mode="vultr", execution="simulate", enable_classifier=False))
