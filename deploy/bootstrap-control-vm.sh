@@ -178,6 +178,10 @@ try:
         assert response.status == 200
     with urlopen("http://127.0.0.1:8787/api/trajectory/snapshot", timeout=2) as response:
         assert response.status == 200
+    with urlopen("http://127.0.0.1:8787/api/tasks/current", timeout=2) as response:
+        assert response.status == 200 and json.loads(response.read()).get("status") in {
+            "idle", "complete", "failed", "interrupted"
+        }
 except (OSError, AssertionError, ValueError):
     sys.exit(1)
 PY
