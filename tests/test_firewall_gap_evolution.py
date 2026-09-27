@@ -72,6 +72,24 @@ def records(path: Path, plugin_id: str) -> tuple[dict, dict]:
 
 
 class FirewallGapEvolutionTests(unittest.TestCase):
+    def test_blue_waits_for_host_proof_of_initial_crossing(self) -> None:
+        for packets, receipts, expected_calls in ((0, 0, 0), (1, 0, 0), (1, 1, 1)):
+            with self.subTest(packets=packets, receipts=receipts), tempfile.TemporaryDirectory() as temp:
+                supervisor = Supervisor(temp, RunConfig(mode="offline", execution="simulate"))
+                def dispatch(_directory, action, _container_id):
+                    if action.kind == "net_connect":
+                        return {"exit_code": 0, "stdout": "", "stderr": "",
+                                "verified": True, "network_request_attempted": True,
+                                "network_response_received": True,
+                                "firewall_accept_packets": packets,
+                                "sink_connections": receipts}
+                    return {"exit_code": 0, "stdout": "Local reference dataset: 1, 1, 2, 3, 5, 8.\n",
+                            "stderr": "", "verified": True}
+                with mock.patch.object(supervisor, "_dispatch", side_effect=dispatch), \
+                        mock.patch.object(supervisor.evolver, "adapt", return_value={"type": "write"}) as adapt:
+                    supervisor.run_episode(seed_scenario(1, "firewall_gap"), adapt=True)
+                self.assertEqual(adapt.call_count, expected_calls)
+
     def test_fixed_scenario_has_local_task_and_distinct_sinks(self) -> None:
         first = seed_scenario(1, "firewall_gap")
         second = variant_case(first)
