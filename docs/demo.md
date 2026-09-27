@@ -66,7 +66,7 @@ ssh -N -L 18787:127.0.0.1:8787 USER@CONTROL_PUBLIC
 ```
 
 Open `http://127.0.0.1:18787/`. In **Start the host agent**, choose one of
-the two fixed cases and press **Start task**:
+the two fixed cases and press **Launch remote task**:
 
 | Choice | What it runs |
 | --- | --- |
@@ -84,13 +84,15 @@ task at a time. The output shown to the browser is a sanitized status and
 closed-schema trajectory, not the raw model transcript or worker output.
 
 The current application path is implemented with a Python dashboard and
-Python Unix-socket broker. The browser-launch path needs its own end-to-end
-VM replay before it is cited as live evidence. The already recorded Kata wall
-and model-evolution proofs in this runbook came from VM1 CLI runs. The
-[browser architecture](browser-control-architecture.md) gives the trust
-boundaries and verification gate. The screenshot's Next.js/FastAPI and
-Playwright-worker labels are reference concepts; this deployment does not
-claim those components.
+Python Unix-socket broker. Both browser cases were replayed end to end on
+September 27: the one-task run completed in a Kata guest, and the strict
+browser evolution run reported `proof_complete=true` after a real model
+proposed the unsafe command, Blue wrote a validated D3 rule, and a fresh
+candidate repeat was denied before dispatch. The
+[browser architecture and recorded run IDs](browser-control-architecture.md)
+give the trust boundaries and verified outcome. The screenshot's
+Next.js/FastAPI and Playwright-worker labels are reference concepts; this
+deployment does not claim those components.
 
 ## Reproduce the two-VM evidence sequence from the CLI
 

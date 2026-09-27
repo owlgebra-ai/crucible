@@ -23,8 +23,10 @@ receives sanitized task status and a live trajectory; it does not receive keys,
 raw model prompts, worker output, or a shell interface. Planning and policy
 judgment run on VM1, and approved actions run in disposable Kata guests on
 VM2. The existing CLI path remains available and shares the task reservation.
-See the [browser control architecture](docs/browser-control-architecture.md)
-for the exact trust boundaries and verification gate.
+Both browser cases have been replayed against the deployed VMs; the strict
+run recorded a model-authored D3 rule and a denied fresh candidate repeat.
+See the [browser control architecture and recorded run IDs](docs/browser-control-architecture.md)
+for the trust boundaries and verified result.
 
 | Dimension | Control | Current implementation |
 | --- | --- | --- |
