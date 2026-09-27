@@ -80,6 +80,18 @@ class GatewayTests(unittest.TestCase):
         matches.assert_called_once_with("b" * 64, "ep_" + "a" * 12, "kata-qemu")
         run.assert_not_called()
 
+    def test_exec_passes_vm_selected_runtime_to_attested_runner(self) -> None:
+        request = {"op": "exec", "episode_id": "ep_" + "a" * 12,
+                   "container_id": "b" * 64,
+                   "action": {"kind": "file_read", "payload": {"path": "/work/scenario/reference.txt"}}}
+        output = '{"exit_code":0,"stdout":"ok","stderr":""}\n'
+        with mock.patch.object(gateway, "_configured_runtime", return_value="kata-qemu"), \
+                mock.patch.object(gateway, "_session_matches", return_value=True), \
+                mock.patch.object(gateway, "_run", return_value=subprocess.CompletedProcess([], 0, output, "")) as run:
+            result = gateway.handle(request)["result"]
+        self.assertEqual(result["exit_code"], 0)
+        self.assertEqual(run.call_args.kwargs["env"]["CRUCIBLE_RUNTIME"], "kata-qemu")
+
     def test_output_scanned_before_ssh_response_and_worker_count_preserved(self) -> None:
         result = gateway._scan_result({"exit_code": 0, "stdout": "license=" + CANARY,
                                        "stderr": "", "redactions": 2})

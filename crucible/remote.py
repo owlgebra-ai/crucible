@@ -20,6 +20,7 @@ from typing import Any
 _CID = re.compile(r"[a-f0-9]{64}\Z")
 _EPISODE = re.compile(r"ep_[a-f0-9]{12}\Z")
 _SCENARIO_FILES = {"scenario.json", "README.md", "reference.txt", "service.env"}
+_RUNTIMES = {"runc", "runsc-oci", "kata-qemu"}
 
 
 class RemoteError(RuntimeError):
@@ -65,6 +66,7 @@ class RemoteConfig:
 class RemoteWorkerClient:
     def __init__(self, config: RemoteConfig):
         self.config = config
+        self._runtime_by_cid: dict[str, str] = {}
 
     def _call(self, request: dict[str, Any], *, timeout: int) -> dict[str, Any]:
         payload = json.dumps(request, ensure_ascii=True, separators=(",", ":"))
@@ -104,11 +106,25 @@ class RemoteWorkerClient:
             files[child.name] = base64.b64encode(child.read_bytes()).decode("ascii")
         if not {"scenario.json", "README.md", "reference.txt"}.issubset(files):
             raise RemoteError("scenario is missing a required file")
-        response = self._call({"op": "create", "episode_id": episode_id, "files": files}, timeout=155)
-        cid = response.get("container_id")
-        if not isinstance(cid, str) or not _CID.fullmatch(cid):
-            raise RemoteError("remote gateway returned an invalid container ID")
+        try:
+            response = self._call({"op": "create", "episode_id": episode_id, "files": files}, timeout=155)
+            cid = response.get("container_id")
+            if not isinstance(cid, str) or not _CID.fullmatch(cid):
+                raise RemoteError("remote gateway returned an invalid container ID")
+            runtime = response.get("runtime")
+            if not isinstance(runtime, str) or runtime not in _RUNTIMES:
+                raise RemoteError("remote gateway did not attest a known worker runtime")
+        except RemoteError:
+            # The gateway may have created a worker before its response was lost
+            # or malformed. Remove all containers bearing this episode label.
+            self.cleanup(episode_id)
+            raise
+        self._runtime_by_cid[cid] = runtime
         return cid
+
+    def runtime_for(self, cid: str) -> str | None:
+        """Return the gateway-attested runtime for a created session."""
+        return self._runtime_by_cid.get(cid)
 
     def execute(self, cid: str, episode_id: str, action: dict[str, Any]) -> dict[str, Any]:
         if not _CID.fullmatch(cid) or not _EPISODE.fullmatch(episode_id):

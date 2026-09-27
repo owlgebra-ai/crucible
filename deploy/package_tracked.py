@@ -68,7 +68,7 @@ def allowed(name: str) -> bool:
             "policy_plugin.mjs", "smoke.patch.yml", "worker.patch.yml"
         }
     return name in {"deploy/bootstrap-vm.sh", "deploy/bootstrap-control-vm.sh",
-                    "deploy/bootstrap-sandbox-vm.sh",
+                    "deploy/bootstrap-sandbox-vm.sh", "deploy/activate-worker-runtime.sh",
                     "deploy/remote-worker-gateway.py", "deploy/authorize-control-key.sh"}
 
 

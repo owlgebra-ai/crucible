@@ -179,10 +179,12 @@ def handle(request: dict[str, Any]) -> dict[str, Any]:
         if set(request) != {"op", "episode_id", "files"} or not isinstance(request["files"], dict):
             raise ValueError("invalid create request")
         files = request["files"]
-        runtime = _configured_runtime()
         if not {"scenario.json", "README.md", "reference.txt"}.issubset(files) or not set(files).issubset(FILES):
             raise ValueError("invalid scenario files")
         with _create_lock():
+            # Runtime activation takes this lock too. Read the selection after
+            # acquiring it so a queued create cannot use the old runtime.
+            runtime = _configured_runtime()
             _ensure_capacity(episode_id)
             with tempfile.TemporaryDirectory(prefix="crucible-remote-") as name:
                 directory = Path(name)
@@ -204,7 +206,7 @@ def handle(request: dict[str, Any]) -> dict[str, Any]:
                     if (created.returncode != 0 or not CID.fullmatch(cid)
                             or not _session_matches(cid, episode_id, runtime)):
                         raise ValueError("worker session creation failed")
-                    return {"ok": True, "container_id": cid}
+                    return {"ok": True, "container_id": cid, "runtime": runtime}
                 except Exception:
                     _cleanup(episode_id)
                     raise
@@ -224,7 +226,8 @@ def handle(request: dict[str, Any]) -> dict[str, Any]:
     if op == "exec":
         if set(request) != {"op", "episode_id", "container_id", "action"}:
             raise ValueError("invalid exec request")
-        if not _session_matches(cid, episode_id, _configured_runtime()):
+        runtime = _configured_runtime()
+        if not _session_matches(cid, episode_id, runtime):
             raise ValueError("worker session does not match episode")
         action, denial = _check_action(request["action"])
         if denial:
@@ -232,7 +235,8 @@ def handle(request: dict[str, Any]) -> dict[str, Any]:
                     "stdout": "", "stderr": "remote pre-exec denied", "policy_denial": denial})}
         assert action is not None
         run = _run([str(ROOT / "infra" / "exec-worker.sh"), cid],
-                   input_text=json.dumps(action, ensure_ascii=True), timeout=85)
+                   input_text=json.dumps(action, ensure_ascii=True), timeout=85,
+                   env={**RUN_ENV, "CRUCIBLE_RUNTIME": runtime})
         if run.returncode != 0:
             return {"ok": True, "result": _scan_result({"exit_code": run.returncode,
                     "stdout": "", "stderr": "worker runner failed"})}

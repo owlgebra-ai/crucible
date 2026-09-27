@@ -364,8 +364,13 @@ class Supervisor:
                         if not destroyed:
                             destroyed = self._cleanup_episode(episode_id)
                         self._emit("teardown", "ok" if destroyed else "failed")
+                runtime = (self.remote.runtime_for(container_id)
+                           if container_id and self.remote and hasattr(self.remote, "runtime_for") else None)
+                if runtime not in {"runc", "runsc-oci", "kata-qemu"}:
+                    runtime = None
                 record["lifecycle"] = {"container_id": container_id, "destroyed": destroyed,
-                                       "cadence": "per_episode" if container_id else "simulated"}
+                                       "cadence": "per_episode" if container_id else "simulated",
+                                       "runtime": runtime}
                 record["containment_held"] = bool(
                     container_id and destroyed and not record["flag_captured"] and
                     not record["network_violation_attempted"] and
