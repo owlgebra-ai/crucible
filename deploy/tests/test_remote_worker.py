@@ -62,6 +62,16 @@ class GatewayTests(unittest.TestCase):
         self.assertIsNone(action)
         self.assertEqual(denial, "D3")
 
+    def test_judge_destructive_command_is_denied_before_container_runner(self) -> None:
+        action = {"kind": "shell", "payload": {"cmd": " ".join(("rm", "-rf", "/"))}}
+        request = {"op": "exec", "episode_id": "ep_" + "a" * 12,
+                   "container_id": "b" * 64, "action": action}
+        with mock.patch.object(gateway, "_session_matches", return_value=True), \
+                mock.patch.object(gateway, "_run") as runner:
+            result = gateway.handle(request)["result"]
+        self.assertEqual((result["exit_code"], result["policy_denial"]), (77, "D3"))
+        runner.assert_not_called()
+
 
 class RemoteClientTests(unittest.TestCase):
     def test_private_target_and_owner_only_key_required(self) -> None:

@@ -24,6 +24,7 @@ _PHASE_LABELS = {
     "red": "Red agent preparing a decoy",
     "sandbox": "Sandbox container starting",
     "worker": "Worker agent choosing an action",
+    "fixed_probe": "Fixed judge action checked",
     "preexec": "Pre-execution policy judgment",
     "remote_exec": "Sandbox action in progress",
     "result": "Sandbox action finished",
