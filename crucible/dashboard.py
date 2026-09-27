@@ -512,6 +512,8 @@ HTML = r"""<!doctype html>
     let trajectoryPoll = null;
     let currentTaskId = '';
     let currentJobId = '';
+    let pinnedBrokerTaskId = '';
+    let launchGeneration = 0;
     let lastTrajectorySeq = 0;
     let taskActive = false;
     let brokerActive = false;
@@ -559,6 +561,8 @@ HTML = r"""<!doctype html>
       if (!event || typeof event !== 'object' || Array.isArray(event)) return;
       const taskId = boundedText(event.task_id, 80);
       if (!taskId) return;
+      // An old SSE frame must not replace the task just launched in this tab.
+      if (pinnedBrokerTaskId && taskId !== pinnedBrokerTaskId) return;
       const seq = Number(event.seq);
       if (!Number.isSafeInteger(seq) || seq <= lastTrajectorySeq) return;
       if (taskId !== currentTaskId) {
@@ -613,6 +617,7 @@ HTML = r"""<!doctype html>
       const jobId = boundedText(data.job_id, 80);
       const active = data.active === true || status === 'queued' || status === 'running';
       brokerActive = active;
+      pinnedBrokerTaskId = active ? taskId : '';
       if (jobId) currentJobId = jobId;
       if (!active) closedJobId = '';
       $('launch-task').disabled = active;
@@ -633,11 +638,15 @@ HTML = r"""<!doctype html>
     }
     async function loadTaskStatus() {
       if (launchPending) return;
+      const generation = launchGeneration;
       try {
         const response = await fetch('/api/tasks/current', {cache:'no-store', credentials:'same-origin'});
         if (!response.ok) throw new Error('status unavailable');
-        renderTaskStatus(await response.json());
+        const data = await response.json();
+        if (generation !== launchGeneration || launchPending) return;
+        renderTaskStatus(data);
       } catch (_) {
+        if (generation !== launchGeneration || launchPending) return;
         $('launch-task').disabled = true;
         showLaunchStatus('Task launcher unavailable', 'error');
       }
@@ -648,6 +657,7 @@ HTML = r"""<!doctype html>
       const taskCase = chosen && chosen.value;
       if (taskCase !== 'safe_demo' && taskCase !== 'readiness_evolution') return;
       launchPending = true;
+      launchGeneration += 1;
       $('launch-task').disabled = true;
       showLaunchStatus('Sending task to VM1…', 'active');
       try {
@@ -667,6 +677,7 @@ HTML = r"""<!doctype html>
         if (!taskId && !jobId) throw new Error('missing task ID');
         currentJobId = jobId;
         brokerActive = true;
+        pinnedBrokerTaskId = taskId;
         resetTrajectory(taskId);
         taskActive = true;
         closedTaskId = '';
@@ -683,14 +694,16 @@ HTML = r"""<!doctype html>
       }
     }
     async function loadTrajectorySnapshot() {
+      const generation = launchGeneration;
       try {
         const response = await fetch('/api/trajectory/snapshot', {cache:'no-store'});
         if (!response.ok) throw new Error('snapshot unavailable');
         const data = await response.json();
+        if (generation !== launchGeneration) return;
         const taskId = boundedText(data.task_id, 80);
+        if (pinnedBrokerTaskId && taskId !== pinnedBrokerTaskId) return;
         const events = Array.isArray(data.events) ? data.events.slice(-150) : [];
         for (const event of events) renderTrajectoryEvent(event, false);
-        if (taskId && currentTaskId && taskId !== currentTaskId) return;
         if (taskId && !currentTaskId) resetTrajectory(taskId);
         taskActive = data.active === true;
         if (taskActive && taskId && closedTaskId !== taskId && (!currentJobId || closedJobId !== currentJobId))
