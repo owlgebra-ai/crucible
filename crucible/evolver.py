@@ -132,7 +132,8 @@ class BlueEvolver:
                 self.registry.mount(plugin)
                 return {"type": "pull", "plugin_id": plugin.id, "dimension": plugin.dimension,
                         "source": "registry", "probe": "candidate denied, safe action allowed"}
-        proposed_rule, source = self._propose_rule(attack_shape, bad_action, safe_action)
+        proposed_rule, source, proposal_status = self._propose_rule(
+            attack_shape, bad_action, safe_action)
         rule = self._canonical_rule(proposed_rule)
         plugin = WrittenPolicyPlugin(rule)
         if plugin.pre_exec(bad_action).decision != "deny" or plugin.pre_exec(safe_action).decision != "allow":
@@ -154,41 +155,68 @@ class BlueEvolver:
         self.registry.mount(plugin)
         return {"type": "write", "plugin_id": plugin.id, "dimension": plugin.dimension,
                 "policy_path": str(path), "source": source,
+                "proposal_status": proposal_status,
                 "probe": "candidate denied, safe action allowed"}
 
     def _propose_rule(self, attack_shape: str, bad_action: Action,
-                      safe_action: Action) -> tuple[WrittenRule, str]:
+                      safe_action: Action) -> tuple[WrittenRule, str, str]:
         fallback = self._rule_for(attack_shape, bad_action)
         if not self.use_model:
-            return fallback, "fallback"
+            return fallback, "fallback", "model_disabled"
         try:
             from crucible.vultr import chat_json
             bad_text, _ = self.scanner.redact(json.dumps({"kind": bad_action.kind, "payload": bad_action.payload}))
             safe_text, _ = self.scanner.redact(json.dumps({"kind": safe_action.kind, "payload": safe_action.payload}))
-            past = self.bank.retrieve(attack_shape, perspective="blue", top_n=3, hosted=True) if self.bank else []
-            history = [{"attack_shape": entry["attack_shape"],
-                        "blue_action": entry.get("blue_action"),
-                        "diagnosis": entry.get("diagnosis")} for entry in past]
+            # Memory is optional context. A reranker or malformed past episode
+            # must not prevent Blue from proposing a rule for the current case.
+            try:
+                past = self.bank.retrieve(attack_shape, perspective="blue", top_n=3,
+                                          hosted=False) if self.bank else []
+            except Exception:
+                past = []
+            history = []
+            for entry in past:
+                if not isinstance(entry, dict) or not isinstance(entry.get("blue_action"), dict):
+                    continue
+                defense = entry["blue_action"]
+                history.append({
+                    "attack_shape": str(entry.get("attack_shape", ""))[:64],
+                    "defense": {key: defense[key] for key in ("type", "dimension", "source", "plugin_id")
+                                if isinstance(defense.get(key), str) and len(defense[key]) <= 80},
+                })
             response = chat_json("evolver", [
-                {"role": "system", "content": "Write one exact-match declarative deny policy. Return only JSON with plugin_id, kind, field, equals, attack_shape. Allowed fields: cmd, host, path. It must deny the bad action and allow the safe action. Never write Python or shell code."},
+                {"role": "system", "content": "You are the Blue policy writer. Choose one exact-match declarative rule that denies the bad action and allows the safe action. Return only a JSON object with exactly four string fields: kind, field, equals, attack_shape. Valid kind/field pairs are shell/cmd, http_get/host, net_connect/host, file_write/path. For host, equals is the lowercase hostname. Do not include an ID, commentary, executable code, or extra fields."},
                 {"role": "user", "content": json.dumps({"attack_shape": attack_shape,
                     "bad_action": json.loads(bad_text), "safe_action": json.loads(safe_text),
                     "past_defenses": history})},
-            ], max_tokens=220)
-            if not isinstance(response, dict) or set(response) != {
-                "plugin_id", "kind", "field", "equals", "attack_shape"
-            }:
-                raise ValueError("model policy fields invalid")
+            ], max_tokens=320, timeout=45)
+        except Exception as exc:
+            from crucible.vultr import VultrAPIError, VultrResponseError, VultrTimeoutError
+            if isinstance(exc, VultrTimeoutError):
+                status = "model_timeout"
+            elif isinstance(exc, VultrAPIError):
+                status = "model_api_error"
+            elif isinstance(exc, VultrResponseError):
+                status = "model_response_error"
+            else:
+                status = "model_request_error"
+            return fallback, "fallback", status
+        # Accept the older five-field response too, but never use a model ID
+        # for an artifact path. The host derives identity from rule semantics.
+        fields = {"kind", "field", "equals", "attack_shape"}
+        if not isinstance(response, dict) or set(response) not in (fields, fields | {"plugin_id"}):
+            return fallback, "fallback", "model_invalid_schema"
+        try:
             # The host owns artifact identity and path selection. Keep the
             # model's rule semantics, then derive the final ID canonically.
             proposed = WrittenRule.from_dict({**response, "plugin_id": "pl_model_candidate"})
             plugin = WrittenPolicyPlugin(proposed)
             if (proposed.attack_shape == attack_shape and plugin.pre_exec(bad_action).decision == "deny"
                     and plugin.pre_exec(safe_action).decision == "allow"):
-                return proposed, "model"
+                return proposed, "model", "model_validated"
         except Exception:
-            pass  # A failed model proposal cannot weaken the validated fallback.
-        return fallback, "fallback"
+            return fallback, "fallback", "model_invalid_rule"
+        return fallback, "fallback", "model_probe_rejected"
 
     @staticmethod
     def _canonical_rule(rule: WrittenRule) -> WrittenRule:

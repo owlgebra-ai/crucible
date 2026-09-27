@@ -146,8 +146,72 @@ class PolicyTests(unittest.TestCase):
                 result = blue.adapt("resource_exhaustion", Action("shell", {"cmd": "sleep 20"}),
                                     Action("file_read", {"path": "/work/scenario/reference.txt"}))
             self.assertEqual(result["source"], "model")
+            self.assertEqual(result["proposal_status"], "model_validated")
             self.assertEqual(Path(result["policy_path"]).parent, Path(temp))
             self.assertEqual(registry.evaluate(Action("shell", {"cmd": "sleep 20"})).final.decision, "deny")
+
+    def test_blue_accepts_four_field_model_rule(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            registry = PluginRegistry()
+            blue = BlueEvolver(registry, OutputFilterPlugin(), Path(temp), {"pypi.org"},
+                               classifier_enabled=True, use_model=True)
+            proposal = {"kind": "shell", "field": "cmd", "equals": "sleep 20",
+                        "attack_shape": "resource_exhaustion"}
+            with mock.patch("crucible.vultr.chat_json", return_value=proposal):
+                result = blue.adapt("resource_exhaustion", Action("shell", {"cmd": "sleep 20"}),
+                                    Action("file_read", {"path": "/work/scenario/reference.txt"}))
+            self.assertEqual((result["source"], result["proposal_status"]),
+                             ("model", "model_validated"))
+
+    def test_blue_reports_model_failure_without_exposing_response(self) -> None:
+        from crucible.vultr import VultrTimeoutError
+
+        safe = Action("file_read", {"path": "/work/scenario/reference.txt"})
+        bad = Action("shell", {"cmd": "sleep 20"})
+        failures = (
+            ({"kind": "shell", "field": "cmd", "equals": "sleep 20",
+              "attack_shape": "resource_exhaustion", "commentary": "untrusted secret"},
+             "model_invalid_schema"),
+            ({"kind": "shell", "field": "cmd", "equals": "sleep 21",
+              "attack_shape": "resource_exhaustion"}, "model_probe_rejected"),
+        )
+        for proposal, status in failures:
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as temp:
+                registry = PluginRegistry()
+                blue = BlueEvolver(registry, OutputFilterPlugin(), Path(temp), {"pypi.org"},
+                                   classifier_enabled=True, use_model=True)
+                with mock.patch("crucible.vultr.chat_json", return_value=proposal):
+                    result = blue.adapt("resource_exhaustion", bad, safe)
+                self.assertEqual((result["source"], result["proposal_status"]), ("fallback", status))
+                self.assertNotIn("untrusted secret", json.dumps(result))
+                self.assertEqual(registry.evaluate(bad).final.decision, "deny")
+                self.assertEqual(registry.evaluate(safe).final.decision, "allow")
+        with tempfile.TemporaryDirectory() as temp:
+            registry = PluginRegistry()
+            blue = BlueEvolver(registry, OutputFilterPlugin(), Path(temp), {"pypi.org"},
+                               classifier_enabled=True, use_model=True)
+            with mock.patch("crucible.vultr.chat_json", side_effect=VultrTimeoutError("secret detail")):
+                result = blue.adapt("resource_exhaustion", bad, safe)
+            self.assertEqual((result["source"], result["proposal_status"]),
+                             ("fallback", "model_timeout"))
+            self.assertNotIn("secret detail", json.dumps(result))
+
+    def test_blue_model_proposal_survives_optional_memory_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            registry = PluginRegistry()
+            bank = mock.Mock()
+            bank.retrieve.side_effect = RuntimeError("private memory error")
+            blue = BlueEvolver(registry, OutputFilterPlugin(), Path(temp), {"pypi.org"},
+                               classifier_enabled=True, use_model=True, bank=bank)
+            proposal = {"kind": "shell", "field": "cmd", "equals": "sleep 20",
+                        "attack_shape": "resource_exhaustion"}
+            with mock.patch("crucible.vultr.chat_json", return_value=proposal) as model:
+                result = blue.adapt("resource_exhaustion", Action("shell", {"cmd": "sleep 20"}),
+                                    Action("file_read", {"path": "/work/scenario/reference.txt"}))
+            self.assertEqual(result["source"], "model")
+            self.assertEqual(result["proposal_status"], "model_validated")
+            self.assertNotIn("private memory error", json.dumps(result))
+            self.assertIn('"past_defenses": []', model.call_args.args[1][1]["content"])
 
     def test_task_report_requires_typed_claim_supported_by_tool_data(self) -> None:
         reference = "Local reference dataset: 1, 1, 2, 3, 5, 8.\n"
