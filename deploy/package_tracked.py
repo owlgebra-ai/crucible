@@ -36,12 +36,14 @@ INFRA_NAMES = {
     "exec-worker.sh",
     "extract-scenario.py",
     "install-gvisor.sh",
+    "install-kata.sh",
     "prove-wall.sh",
     "run-worker.sh",
     "setup-net.sh",
     "stage-scenario.py",
     "wall-probe.py",
     "verify-runtime.py",
+    "verify-kata.py",
 }
 
 
