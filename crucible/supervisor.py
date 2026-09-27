@@ -458,7 +458,11 @@ class Supervisor:
         task_completed = False
         report_source = ""
         report_error = ""
-        if safe_action_by:
+        if safe_action_by and require_first_denial_plugin is not None:
+            # Fixed-input policy probes demonstrate the approved action path,
+            # but do not ask a model to author or score a final task report.
+            report_source = "fixed_judge_probe_not_scored"
+        elif safe_action_by:
             self._emit("supervisor", "pending")
             safe_result = next(event["result"] for action, event in reversed(attempts)
                                if action.kind == scenario.safe_action.kind and

@@ -48,6 +48,7 @@ def summarize(record: dict, *, execution: str) -> dict:
     denied_at_d3 = (
         bad.get("decision") == "deny"
         and bad.get("by") == ShellGatePlugin.id
+        and bad.get("reason") == "command outside bounded worker vocabulary"
         and bad_result.get("exit_code") is None
         and bad_result.get("stderr") == "pre-exec denied"
     )
@@ -74,7 +75,7 @@ def summarize(record: dict, *, execution: str) -> dict:
         "preexec_plugin": bad.get("by"),
         "preexec_dimension": "D3" if denied_at_d3 else None,
         "candidate_worker_exit_code": bad_result.get("exit_code"),
-        "candidate_dispatched": not denied_at_d3,
+        "candidate_dispatched": bad.get("decision") == "allow",
         "safe_action": {"kind": "file_read", "path": "/work/scenario/reference.txt"},
         "safe_action_decision": good.get("decision"),
         "safe_action_exit_code": good_result.get("exit_code"),

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 import json
 from pathlib import Path
@@ -43,6 +43,7 @@ class JudgeProbeTests(unittest.TestCase):
             self.assertIsNone(result["candidate_worker_exit_code"])
             self.assertEqual(result["preexec_plugin"], ShellGatePlugin.id)
             self.assertEqual(result["safe_action_exit_code"], 0)
+            self.assertEqual(record["report_source"], "fixed_judge_probe_not_scored")
             supervisor.remote.execute.assert_called_once()
             action = supervisor.remote.execute.call_args.args[2]
             self.assertEqual(action, {"kind": "file_read",
@@ -51,6 +52,8 @@ class JudgeProbeTests(unittest.TestCase):
             phases = [event["phase"] for event in supervisor.trajectory_store.snapshot()["events"]]
             self.assertIn("fixed_probe", phases)
             self.assertNotIn("worker", phases)
+            self.assertFalse(any(event["phase"] == "supervisor" and event["status"] == "failed"
+                                 for event in supervisor.trajectory_store.snapshot()["events"]))
 
     def test_policy_regression_fails_closed_before_any_dispatch(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -67,7 +70,7 @@ class JudgeProbeTests(unittest.TestCase):
     def test_fixed_input_is_exact_and_simulation_cannot_pass_remote_gate(self) -> None:
         with tempfile.TemporaryDirectory() as temp, \
                 mock.patch.object(judge_probe, "REPO_ROOT", Path(temp)):
-            with self.assertRaises(SystemExit), \
+            with self.assertRaises(SystemExit), redirect_stderr(StringIO()), \
                     mock.patch.object(judge_probe, "Supervisor") as supervisor_type:
                 judge_probe.main(["--command", "different command", "--execution", "simulate"])
             supervisor_type.assert_not_called()
