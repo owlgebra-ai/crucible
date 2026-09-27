@@ -20,6 +20,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -123,9 +124,17 @@ def _cleanup(episode_id: str, known_cid: str | None = None) -> bool:
     if selected_runtime == "kata-qemu" and not kata_ids:
         return False
     for cid in kata_ids:
-        proof = _run([sys.executable, str(ROOT / "infra" / "verify-kata.py"),
-                      "--destroyed", cid], timeout=30)
-        if proof.returncode != 0:
+        # Docker can return from rm before the shim drops its last socket or
+        # Kata removes its state directory. A bounded retry distinguishes that
+        # normal cleanup lag from an orphaned guest; success is still required.
+        for attempt in range(10):
+            proof = _run([sys.executable, str(ROOT / "infra" / "verify-kata.py"),
+                          "--destroyed", cid], timeout=5)
+            if proof.returncode == 0:
+                break
+            if attempt < 9:
+                time.sleep(0.5)
+        else:
             return False
     return True
 

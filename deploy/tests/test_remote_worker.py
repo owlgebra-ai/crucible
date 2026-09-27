@@ -128,18 +128,23 @@ class GatewayTests(unittest.TestCase):
         episode = "ep_" + "a" * 12
         cid = "b" * 64
         done = lambda output="", code=0: subprocess.CompletedProcess([], code, output, "")
-        results = [done(cid + "\n"), done("kata-qemu\n"), done(), done(), done(code=77)]
+        prefix = [done(cid + "\n"), done("kata-qemu\n"), done(), done()]
+        results = prefix + [done(code=77)] * 10
         with mock.patch.object(gateway, "_configured_runtime", return_value="kata-qemu"), \
-                mock.patch.object(gateway, "_run", side_effect=results) as run:
+                mock.patch.object(gateway, "_run", side_effect=results) as run, \
+                mock.patch.object(gateway.time, "sleep") as sleep:
             self.assertFalse(gateway._cleanup(episode, known_cid=cid))
+        self.assertEqual(sleep.call_count, 9)
         commands = [call.args[0] for call in run.call_args_list]
         self.assertEqual(commands[2], ["docker", "rm", "-f", cid])
         self.assertEqual(commands[-1][-2:], ["--destroyed", cid])
 
-        results[-1] = done("kata-qemu microVM teardown: OK\n")
+        results = prefix + [done(code=77), done("kata-qemu microVM teardown: OK\n")]
         with mock.patch.object(gateway, "_configured_runtime", return_value="kata-qemu"), \
-                mock.patch.object(gateway, "_run", side_effect=results):
+                mock.patch.object(gateway, "_run", side_effect=results), \
+                mock.patch.object(gateway.time, "sleep") as sleep:
             self.assertTrue(gateway._cleanup(episode, known_cid=cid))
+        sleep.assert_called_once_with(0.5)
 
     def test_kata_cleanup_without_task_id_does_not_claim_vm_teardown(self) -> None:
         episode = "ep_" + "a" * 12

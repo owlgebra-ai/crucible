@@ -141,7 +141,7 @@ class RemoteWorkerClient:
             return False
         try:
             return self._call({"op": "destroy", "container_id": cid,
-                               "episode_id": episode_id}, timeout=45).get("destroyed") is True
+                               "episode_id": episode_id}, timeout=75).get("destroyed") is True
         except RemoteError:
             return False
 
