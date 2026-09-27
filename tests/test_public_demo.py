@@ -6,7 +6,7 @@ import tempfile
 import unittest
 
 from crucible.experience import ExperienceBank
-from crucible.public_demo import APPROVED_REPORTS, export, parse_wall_proof, public_snapshot
+from crucible.public_demo import APPROVED_REPORTS, _static_html, export, parse_wall_proof, public_snapshot
 
 
 PRIVATE_PROOF_MARKER = "PRIVATE_PROOF_MARKER_953b2395"
@@ -354,7 +354,9 @@ class PublicDemoTests(unittest.TestCase):
         body = (self.site / "snapshot.json").read_text()
         html = (self.site / "index.html").read_text()
         self.assertEqual(json.loads(body)["wall_proof"]["drop_packets"], 3)
-        self.assertIn("VM wall transcript", html)
+        self.assertIn('<h2 id="wall-proof-heading">Historical runc VM wall transcript</h2>', html)
+        self.assertIn('<h2 id="wall-proof-heading">Kata guest wall transcript</h2>',
+                      _static_html("kata-qemu"))
         self.assertIn("Transcript checks passed", html)
         self.assertNotIn(PRIVATE_PROOF_MARKER, body + html)
 

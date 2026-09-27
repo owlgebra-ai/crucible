@@ -474,7 +474,12 @@ PUBLIC_ISOLATION_MARKUP = r"""  <!-- PUBLIC_ISOLATION_START -->
 """
 
 
-def _static_html() -> str:
+def _static_html(wall_runtime: str | None = None) -> str:
+    wall_heading = {
+        "runc": "Historical runc VM wall transcript",
+        "kata-qemu": "Kata guest wall transcript",
+        "runsc-oci": "runsc-oci worker wall transcript",
+    }.get(wall_runtime, "VM wall transcript")
     nonce = secrets.token_urlsafe(18)
     page = HTML.replace("__NONCE__", nonce)
     # The private dashboard can observe live CLI tasks. Public Pages remains a
@@ -518,7 +523,7 @@ def _static_html() -> str:
                         '<span>05 / Episode record</span>')
     page = page.replace(
         '  <section class="card chart-card" id="evidence"><h2>Outcome across recorded episodes</h2>',
-        '  <section class="card chart-card wall-card"><h2>VM wall transcript</h2>\n'
+        f'  <section class="card chart-card wall-card"><h2 id="wall-proof-heading">{wall_heading}</h2>\n'
         '    <p id="wall-proof-status" class="empty">No wall proof summary attached.</p>\n'
         '    <p id="wall-proof-detail" class="subtle">The full VM transcript remains private for review.</p>\n'
         '  </section>\n'
@@ -527,6 +532,8 @@ def _static_html() -> str:
         "      chart(data.curves);",
         "      if (data.wall_proof && data.wall_proof.status === 'checks_passed') {\n"
         "        const proof = data.wall_proof;\n"
+        "        $('wall-proof-heading').textContent = proof.runtime === 'runc' ? 'Historical runc VM wall transcript' :\n"
+        "          proof.runtime === 'kata-qemu' ? 'Kata guest wall transcript' : 'runsc-oci worker wall transcript';\n"
         "        $('wall-proof-status').textContent = 'Transcript checks passed · ' + proof.runtime +\n"
         "          ' · ' + proof.drop_packets + ' probe packet' + (proof.drop_packets === 1 ? '' : 's') +\n"
         "          ' at the default DROP path';\n"
@@ -535,6 +542,7 @@ def _static_html() -> str:
         "          'KVM-backed Kata guest, separate kernel, guest seccomp and resource limits, network policy, denied ptrace, and microVM teardown were recorded. The full VM transcript remains private for review.' :\n"
         "          'Container profile, pinned TLS, blocked external DNS, denied ptrace, and teardown were recorded. The full VM transcript remains private for review.';\n"
         "      } else {\n"
+        "        $('wall-proof-heading').textContent = 'VM wall transcript';\n"
         "        $('wall-proof-status').textContent = 'No wall proof summary attached.';\n"
         "        $('wall-proof-status').className = 'empty';\n"
         "      }\n"
@@ -605,7 +613,9 @@ def export(db_path: str | Path, output_dir: str | Path, *, limit: int = 200,
     data = (json.dumps(snapshot, ensure_ascii=True, sort_keys=True,
                        separators=(",", ":"), allow_nan=False) + "\n").encode("ascii")
     _write_atomic(target / "snapshot.json", data)
-    _write_atomic(target / "index.html", _static_html().encode("utf-8"))
+    wall_summary = snapshot["wall_proof"]
+    _write_atomic(target / "index.html", _static_html(
+        wall_summary["runtime"] if wall_summary else None).encode("utf-8"))
     return snapshot["summary"]
 
 

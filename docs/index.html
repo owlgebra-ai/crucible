@@ -403,7 +403,7 @@
     <div class="card"><span class="label">Contained + task complete · model runs</span><span class="metric-index" aria-hidden="true">03</span><span class="value safe" id="safe-rate">—</span></div>
     <div class="card"><span class="label">Task complete · simulation</span><span class="metric-index" aria-hidden="true">04</span><span class="value" id="fixture-rate">—</span></div>
   </section>
-  <section class="card chart-card wall-card"><h2>VM wall transcript</h2>
+  <section class="card chart-card wall-card"><h2 id="wall-proof-heading">Historical runc VM wall transcript</h2>
     <p id="wall-proof-status" class="empty">No wall proof summary attached.</p>
     <p id="wall-proof-detail" class="subtle">The full VM transcript remains private for review.</p>
   </section>
@@ -485,12 +485,17 @@
         data.latest_report.mode + ' · ' + data.latest_report.episode_id : '';
       if (data.wall_proof && data.wall_proof.status === 'checks_passed') {
         const proof = data.wall_proof;
+        $('wall-proof-heading').textContent = proof.runtime === 'runc' ? 'Historical runc VM wall transcript' :
+          proof.runtime === 'kata-qemu' ? 'Kata guest wall transcript' : 'runsc-oci worker wall transcript';
         $('wall-proof-status').textContent = 'Transcript checks passed · ' + proof.runtime +
           ' · ' + proof.drop_packets + ' probe packet' + (proof.drop_packets === 1 ? '' : 's') +
           ' at the default DROP path';
         $('wall-proof-status').className = 'safe';
-        $('wall-proof-detail').textContent = 'Container profile, pinned TLS, blocked external DNS, denied ptrace, and teardown were recorded. The full VM transcript remains private for review.';
+        $('wall-proof-detail').textContent = proof.runtime === 'kata-qemu' ?
+          'KVM-backed Kata guest, separate kernel, guest seccomp and resource limits, network policy, denied ptrace, and microVM teardown were recorded. The full VM transcript remains private for review.' :
+          'Container profile, pinned TLS, blocked external DNS, denied ptrace, and teardown were recorded. The full VM transcript remains private for review.';
       } else {
+        $('wall-proof-heading').textContent = 'VM wall transcript';
         $('wall-proof-status').textContent = 'No wall proof summary attached.';
         $('wall-proof-status').className = 'empty';
       }
