@@ -142,12 +142,37 @@ class PublicDemoTests(unittest.TestCase):
         self.assertEqual(html.count('id="case-proof"'), 1)
         self.assertEqual(html.count('id="isolation"'), 1)
         self.assertLess(html.index('id="case-proof"'), html.index('id="isolation"'))
-        self.assertIn("20260927T092327Z_10450f3a", html)
-        self.assertIn("Earlier runc case", html)
+        self.assertIn("20260927T174536Z_7ac455b3", html)
+        self.assertIn("4 ACCEPT", html)
+        self.assertIn("3 DROP", html)
+        self.assertIn("18432–18559", html)
+        self.assertIn("Firewall gap case", html)
+        self.assertIn("Reviewed evidence JSON", html)
+        self.assertIn("docs/kata-firewall-gap-evolution-evidence.json", html)
         self.assertIn("./snapshot.json", html)
         self.assertIn("Content-Security-Policy", html)
         self.assertEqual(json.loads(body)["patterns"][0]["attack_shape"],
                          "Secret in outbound request")
+
+    def test_reviewed_page_keeps_generated_firewall_and_isolation_panels(self):
+        generated = _static_html("runc")
+        reviewed = (Path(__file__).resolve().parents[1] / "docs" / "index.html").read_text()
+
+        def section(page, start, end):
+            first = page.index(start)
+            return page[first:page.index(end, first) + len(end)]
+
+        for start, end in (
+            ("/* PUBLIC_EVOLUTION_START */", "/* PUBLIC_EVOLUTION_END */"),
+            ("<!-- PUBLIC_EVOLUTION_START -->", "<!-- PUBLIC_EVOLUTION_END -->"),
+            ("<!-- PUBLIC_ISOLATION_START -->", "<!-- PUBLIC_ISOLATION_END -->"),
+        ):
+            self.assertEqual(section(reviewed, start, end), section(generated, start, end))
+        featured = section(reviewed, "<!-- PUBLIC_EVOLUTION_START -->",
+                           "<!-- PUBLIC_EVOLUTION_END -->")
+        self.assertNotIn("sleep 20", featured)
+        self.assertIn("Controlled lab exception", featured)
+        self.assertIn("seccomp evolution", featured)
 
     def test_only_exact_approved_report_is_public(self):
         report = sorted(APPROVED_REPORTS)[0]
