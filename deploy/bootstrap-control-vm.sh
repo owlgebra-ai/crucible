@@ -46,6 +46,14 @@ if [[ ! -f /var/lib/crucible/data/experience.sqlite ]]; then
   runuser -u crucible -- env PYTHONPATH="$RELEASE" /usr/bin/python3 -c \
     'from crucible.experience import ExperienceBank; ExperienceBank("/var/lib/crucible/data/experience.sqlite")'
 fi
+# A release switch must not kill a browser or CLI task while its remote guest
+# is still running. An interrupted task may need operator cleanup first.
+PYTHONPATH="$RELEASE" /usr/bin/python3 - <<'PY'
+from crucible.trajectory import TrajectoryStore
+state = TrajectoryStore("/var/lib/crucible/data/experience.sqlite", read_only=True).snapshot(limit=1)
+if state.get("active") is True:
+    raise SystemExit("control deployment refused while a task is active")
+PY
 
 BROKER_UNIT=/etc/systemd/system/crucible-task-broker.service
 DASHBOARD_UNIT=/etc/systemd/system/crucible-dashboard.service
