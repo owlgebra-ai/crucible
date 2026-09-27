@@ -91,13 +91,17 @@ systemctl restart crucible-dashboard.service
 HEALTHY=0
 for _ in 1 2 3 4 5 6 7 8 9 10; do
   if python3 - <<'PY'
+import sys
 from urllib.request import urlopen
-with urlopen("http://127.0.0.1:8787/healthz", timeout=2) as response:
-    assert response.status == 200 and response.read() == b"ok\n"
-with urlopen("http://127.0.0.1:8787/api/snapshot", timeout=2) as response:
-    assert response.status == 200
-with urlopen("http://127.0.0.1:8787/api/trajectory/snapshot", timeout=2) as response:
-    assert response.status == 200
+try:
+    with urlopen("http://127.0.0.1:8787/healthz", timeout=2) as response:
+        assert response.status == 200 and response.read() == b"ok\n"
+    with urlopen("http://127.0.0.1:8787/api/snapshot", timeout=2) as response:
+        assert response.status == 200
+    with urlopen("http://127.0.0.1:8787/api/trajectory/snapshot", timeout=2) as response:
+        assert response.status == 200
+except (OSError, AssertionError):
+    sys.exit(1)
 PY
   then
     if systemctl is-active --quiet crucible-dashboard.service; then HEALTHY=1; break; fi
