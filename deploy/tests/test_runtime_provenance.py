@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import importlib.util
+import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -92,6 +93,28 @@ class RuntimeProvenanceTests(unittest.TestCase):
                     client.create(scenario, episode_id)
             self.assertEqual([entry.args[0]["op"] for entry in call.call_args_list],
                              ["create", "cleanup"])
+
+    def test_required_runtime_rejects_mismatch_before_exec(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            scenario = self._scenario(Path(temp))
+            client = self._client(Path(temp))
+            episode_id = "ep_" + "a" * 12
+            cid = "a" * 64
+            with mock.patch.dict(os.environ, {"CRUCIBLE_REQUIRED_RUNTIME": "kata-qemu"}), \
+                    mock.patch.object(client, "_call", side_effect=[
+                        {"container_id": cid, "runtime": "runc"}, {"destroyed": True}
+                    ]) as call:
+                with self.assertRaisesRegex(RemoteError, "unexpected worker runtime"):
+                    client.create(scenario, episode_id)
+            self.assertEqual([item.args[0]["op"] for item in call.call_args_list],
+                             ["create", "cleanup"])
+            self.assertIsNone(client.runtime_for(cid))
+
+            with mock.patch.dict(os.environ, {"CRUCIBLE_REQUIRED_RUNTIME": "unknown"}), \
+                    mock.patch.object(client, "_call") as call:
+                with self.assertRaisesRegex(RemoteError, "invalid required worker runtime"):
+                    client.create(scenario, episode_id)
+                call.assert_not_called()
 
     def test_supervisor_records_runtime_in_persisted_lifecycle(self) -> None:
         class FakeRemote:

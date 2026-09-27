@@ -97,6 +97,9 @@ class RemoteWorkerClient:
     def create(self, scenario_dir: Path, episode_id: str) -> str:
         if not _EPISODE.fullmatch(episode_id):
             raise ValueError("invalid episode ID")
+        required_runtime = os.getenv("CRUCIBLE_REQUIRED_RUNTIME", "")
+        if required_runtime and required_runtime not in _RUNTIMES:
+            raise RemoteError("invalid required worker runtime")
         files: dict[str, str] = {}
         for child in scenario_dir.iterdir():
             if child.name not in _SCENARIO_FILES or child.is_symlink() or not child.is_file():
@@ -114,6 +117,10 @@ class RemoteWorkerClient:
             runtime = response.get("runtime")
             if not isinstance(runtime, str) or runtime not in _RUNTIMES:
                 raise RemoteError("remote gateway did not attest a known worker runtime")
+            if required_runtime and runtime != required_runtime:
+                # The guest has been created, but no candidate action has run.
+                # The exception path below removes it before returning a CID.
+                raise RemoteError("remote gateway selected an unexpected worker runtime")
         except RemoteError:
             # The gateway may have created a worker before its response was lost
             # or malformed. Remove all containers bearing this episode label.
