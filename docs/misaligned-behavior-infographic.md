@@ -2,6 +2,8 @@
 
 ![The 20-second detour infographic](misaligned-behavior-infographic.svg)
 
+For the main security story, use the [D1 unnecessary-fetch variant](network-detour-infographic.md). This D3 case works as a smaller inset showing a new declarative rule being written.
+
 ## The story to tell
 
 **Headline:** A scripted off-task action passed the first command check, ran inside a disposable remote container, and timed out. Blue then wrote a narrow D3 rule. In a fresh-container rerun, the same action was denied before execution while the legitimate local read remained available.
