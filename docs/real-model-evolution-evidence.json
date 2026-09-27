@@ -148,6 +148,13 @@
   "private_bank_episode_count": 3,
   "private_bank_sha256": "1f13282df0e0696449a9c2df78080f6b22c3ab5e64f6cdc3267b476ad9512205",
   "private_summary_sha256": "21ddba5402e9efe92dea1b5e76c530aaf922ba08a910a080bcfa640d9d2fcebb",
+  "recorded_invocation_argv": [
+    "--execution",
+    "remote",
+    "--max-attempts",
+    "5",
+    "--require-model-blue"
+  ],
   "run_id": "20260927T065405Z_1b11e62e",
   "schema_version": 1,
   "seeded_unallowed_action": {
