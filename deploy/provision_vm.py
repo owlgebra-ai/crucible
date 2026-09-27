@@ -39,7 +39,10 @@ from urllib.request import (
 
 API_BASE = "https://api.vultr.com/v2"
 ROOT = Path(__file__).resolve().parent.parent
-KEY_FILE = ROOT / "secrets" / "vultr_key.json"
+_key_file_setting = os.getenv("CRUCIBLE_MANAGEMENT_KEY_FILE", "secrets/vultr_key.json")
+KEY_FILE = Path(_key_file_setting)
+if not KEY_FILE.is_absolute():
+    KEY_FILE = ROOT / KEY_FILE
 STATE_FILE = ROOT / "secrets" / "provisioned_vm.json"
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 MAX_PLANNED_HOURS = 168
@@ -69,7 +72,7 @@ def _tls_context() -> ssl.SSLContext:
 
 def load_management_key(path: Path = KEY_FILE) -> str:
     try:
-        if path.stat().st_mode & 0o077:
+        if path.is_symlink() or not path.is_file() or path.stat().st_mode & 0o077:
             raise ProvisionError("Management key file must be accessible only to its owner (chmod 600)")
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError, UnicodeError):

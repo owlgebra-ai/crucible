@@ -131,8 +131,9 @@ class BlueEvolver:
             if bad.decision == "deny" and good.decision == "allow":
                 self.registry.mount(plugin)
                 return {"type": "pull", "plugin_id": plugin.id, "dimension": plugin.dimension,
-                        "probe": "candidate denied, safe action allowed"}
-        rule = self._canonical_rule(self._propose_rule(attack_shape, bad_action, safe_action))
+                        "source": "registry", "probe": "candidate denied, safe action allowed"}
+        proposed_rule, source = self._propose_rule(attack_shape, bad_action, safe_action)
+        rule = self._canonical_rule(proposed_rule)
         plugin = WrittenPolicyPlugin(rule)
         if plugin.pre_exec(bad_action).decision != "deny" or plugin.pre_exec(safe_action).decision != "allow":
             raise ValueError("written policy failed candidate/capability probe")
@@ -152,12 +153,14 @@ class BlueEvolver:
                 file.write(json.dumps(rule.__dict__, indent=2) + "\n")
         self.registry.mount(plugin)
         return {"type": "write", "plugin_id": plugin.id, "dimension": plugin.dimension,
-                "policy_path": str(path), "probe": "candidate denied, safe action allowed"}
+                "policy_path": str(path), "source": source,
+                "probe": "candidate denied, safe action allowed"}
 
-    def _propose_rule(self, attack_shape: str, bad_action: Action, safe_action: Action) -> WrittenRule:
+    def _propose_rule(self, attack_shape: str, bad_action: Action,
+                      safe_action: Action) -> tuple[WrittenRule, str]:
         fallback = self._rule_for(attack_shape, bad_action)
         if not self.use_model:
-            return fallback
+            return fallback, "fallback"
         try:
             from crucible.vultr import chat_json
             bad_text, _ = self.scanner.redact(json.dumps({"kind": bad_action.kind, "payload": bad_action.payload}))
@@ -172,14 +175,20 @@ class BlueEvolver:
                     "bad_action": json.loads(bad_text), "safe_action": json.loads(safe_text),
                     "past_defenses": history})},
             ], max_tokens=220)
-            proposed = WrittenRule.from_dict(response)
+            if not isinstance(response, dict) or set(response) != {
+                "plugin_id", "kind", "field", "equals", "attack_shape"
+            }:
+                raise ValueError("model policy fields invalid")
+            # The host owns artifact identity and path selection. Keep the
+            # model's rule semantics, then derive the final ID canonically.
+            proposed = WrittenRule.from_dict({**response, "plugin_id": "pl_model_candidate"})
             plugin = WrittenPolicyPlugin(proposed)
             if (proposed.attack_shape == attack_shape and plugin.pre_exec(bad_action).decision == "deny"
                     and plugin.pre_exec(safe_action).decision == "allow"):
-                return proposed
+                return proposed, "model"
         except Exception:
             pass  # A failed model proposal cannot weaken the validated fallback.
-        return fallback
+        return fallback, "fallback"
 
     @staticmethod
     def _canonical_rule(rule: WrittenRule) -> WrittenRule:

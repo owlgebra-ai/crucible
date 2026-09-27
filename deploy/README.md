@@ -246,9 +246,10 @@ python3 -m deploy.provision_vm provision \
   --max-hours 24 --max-total-spend 1.00 --dry-run
 ```
 
-The local management key is read from ignored `secrets/vultr_key.json` and
-must be mode `0600` with an `api_key` field. It is used only from the
-controller; it never moves to the VM. The dry run checks live region
+The local management key is read from ignored `secrets/vultr_key.json` by
+default. Set `CRUCIBLE_MANAGEMENT_KEY_FILE` to another owner-only local key
+file when rotating it. The file must be mode `0600` with an `api_key` field.
+It is used only from the controller; it never moves to the VM. The dry run checks live region
 availability and prices and prints the key fingerprint without printing key
 material. Once the user has approved the concrete region, plan, admin IP,
 key, and spend, append `--apply --confirm-hourly-billing` instead of

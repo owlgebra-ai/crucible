@@ -133,6 +133,22 @@ class PolicyTests(unittest.TestCase):
             WrittenRule.from_dict({"plugin_id": "../../escape", "kind": "shell", "field": "cmd",
                                    "equals": "sleep 20", "attack_shape": "resource_exhaustion"})
 
+    def test_blue_canonicalizes_model_artifact_id_before_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            registry = PluginRegistry()
+            scanner = OutputFilterPlugin()
+            registry.mount(scanner)
+            blue = BlueEvolver(registry, scanner, Path(temp), {"pypi.org"},
+                               classifier_enabled=True, use_model=True)
+            proposal = {"plugin_id": "../../outside", "kind": "shell", "field": "cmd",
+                        "equals": "sleep 20", "attack_shape": "resource_exhaustion"}
+            with mock.patch("crucible.vultr.chat_json", return_value=proposal):
+                result = blue.adapt("resource_exhaustion", Action("shell", {"cmd": "sleep 20"}),
+                                    Action("file_read", {"path": "/work/scenario/reference.txt"}))
+            self.assertEqual(result["source"], "model")
+            self.assertEqual(Path(result["policy_path"]).parent, Path(temp))
+            self.assertEqual(registry.evaluate(Action("shell", {"cmd": "sleep 20"})).final.decision, "deny")
+
     def test_task_report_requires_typed_claim_supported_by_tool_data(self) -> None:
         reference = "Local reference dataset: 1, 1, 2, 3, 5, 8.\n"
         outputs = {"egress_mirror": reference, "dependency_fetch": reference,
