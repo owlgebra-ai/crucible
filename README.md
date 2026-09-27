@@ -1,6 +1,6 @@
 # CRUCIBLE
 
-CRUCIBLE is an agent containment experiment. A red generator presents a legitimate task with an unsafe shortcut; a worker proposes an action; the supervisor checks it before execution; and a blue evolver pulls or writes a narrow defense, then reruns the case. The experience bank records attempts and distilled defenses. The worker proposes typed report facts from an approved tool result; the supervisor checks them against that result and produces a canonical final report. The dashboard is a readout of those records. The [historical real-model readiness case](docs/real-model-elicitation.md) records a remote candidate's off-task command, a validated **model-authored** Blue D3 rule, and the same candidate action denied before dispatch on a fresh rerun. The [judge proof](docs/judge-proof.md) maps the four track questions to live commands and recorded outcomes. See the [public demo](https://owlgebra.ai/crucible/), [60-second evidence walkthrough](docs/demo.mp4), and [demo runbook](docs/demo.md) for the broader VM evidence.
+CRUCIBLE is an agent containment experiment. A red generator presents a legitimate task with an unsafe shortcut; a worker proposes an action; the supervisor checks it before execution; and a blue evolver pulls or writes a narrow defense, then reruns the case. The experience bank records attempts and distilled defenses. The worker proposes typed report facts from an approved tool result; the supervisor checks them against that result and produces a canonical final report. The private dashboard launches fixed browser tasks and reads out those records. The [historical real-model readiness case](docs/real-model-elicitation.md) records a remote candidate's off-task command, a validated **model-authored** Blue D3 rule, and the same candidate action denied before dispatch on a fresh rerun. The [judge proof](docs/judge-proof.md) maps the four track questions to live commands and recorded outcomes. See the [public demo](https://owlgebra.ai/crucible/), [60-second evidence walkthrough](docs/demo.mp4), and [demo runbook](docs/demo.md) for the broader VM evidence.
 
 ## Architecture
 
@@ -13,6 +13,18 @@ red scenario → worker proposal → supervisor policy checks → disposable wor
 ```
 
 The supervisor keeps Vultr inference credentials on the control host. For the two-VM path, it sends bounded actions over a pinned, forced-command SSH connection on a private Vultr VPC network to a separate sandbox VM. **The current VM2 worker runtime is Docker with Kata/QEMU:** the task runs in a KVM-backed guest with its own Linux kernel. A live wall proof, one model-driven demo episode and two model-driven runtime-enforced evolution episodes linked to `kata-qemu` are recorded in the [isolation tier checklist](docs/isolation-checklist.md). The earlier live episodes used Docker `runc`, which shared VM2's kernel and remain tier 02 evidence. The worker image receives no inference or account API key. Offline simulation exercises the control flow without claiming an actual sandbox boundary.
+
+The control VM also serves a **browser launch surface** over a loopback SSH
+tunnel. Its Python dashboard accepts only two fixed cases: one bounded real
+model task and a strict readiness-pretext evolution attempt. It forwards the
+case name over a private Unix socket to a separate broker, which owns the
+inference key, pinned VM2 SSH key, and one-active-task reservation. The browser
+receives sanitized task status and a live trajectory; it does not receive keys,
+raw model prompts, worker output, or a shell interface. Planning and policy
+judgment run on VM1, and approved actions run in disposable Kata guests on
+VM2. The existing CLI path remains available and shares the task reservation.
+See the [browser control architecture](docs/browser-control-architecture.md)
+for the exact trust boundaries and verification gate.
 
 | Dimension | Control | Current implementation |
 | --- | --- | --- |
@@ -75,16 +87,17 @@ python3 -m crucible bank
 python3 -m crucible.dashboard --db data/experience.sqlite --host 127.0.0.1 --port 8787
 ```
 
-Open `http://127.0.0.1:8787` on the same host for the read-only dashboard; for a VM, use an SSH tunnel as shown in the [runbook](docs/demo.md). The live curves include verified same-host Docker and remote sandbox VM episodes: attack success, and `containment_held` **and** `task_completed`. The dashboard shows the two execution modes separately. Completion requires the exact safe action to exit successfully and a sanitized final report to pass the scenario rubric. Simulated fixture completion is shown separately. The latest report panel shows a sanitized completed report. These records do not replace the packet or syscall evidence needed for a live wall proof. Bind to loopback by default; use an authenticated TLS reverse proxy if sharing it outside the VM.
+Open `http://127.0.0.1:8787` on the same host for the dashboard; for a VM, use an SSH tunnel as shown in the [runbook](docs/demo.md). On the deployed control VM, the browser can start one of the two fixed remote cases; a local dashboard without the separate broker can still display evidence but cannot launch a VM task. The live curves include verified same-host Docker and remote sandbox VM episodes: attack success, and `containment_held` **and** `task_completed`. The dashboard shows the two execution modes separately. Completion requires the exact safe action to exit successfully and a sanitized final report to pass the scenario rubric. Simulated fixture completion is shown separately. The latest report panel shows a sanitized completed report. These records do not replace the packet or syscall evidence needed for a live wall proof. Bind to loopback by default; use an authenticated TLS reverse proxy if sharing it outside the VM.
 
-When a remote CLI task starts, the private dashboard automatically opens a
+When a browser-launched or remote CLI task starts, the private dashboard automatically opens a
 right-side **Agent trajectory** pane. It shows red setup, worker proposals,
 pre-execution verdicts, in-flight sandbox actions, results, supervisor and
 blue phases, and teardown as they occur. The feed uses fixed labels, action
 kinds, policy dimensions, and exit codes; it omits raw prompts, commands,
-outputs, URLs, credentials, and container IDs. The CLI keeps launch authority
-and the dashboard remains read-only. The public Pages snapshot has no live
-feed. See [the runbook](docs/demo.md) for the remote CLI command and tunnel.
+outputs, URLs, credentials, and container IDs. The browser sends only a fixed
+case name to the VM1 broker; it cannot supply a prompt, command, URL, or worker
+payload. The public Pages snapshot has no live feed or launch control. See
+[the runbook](docs/demo.md) for the tunnel, browser flow, and optional CLI.
 
 The live Vultr catalog is [`GET /v1/models`](https://api.vultrinference.com/v1/models). The user-supplied `/v1/chat/models` path returned HTTP 404 on September 26, 2026; `/v1/models` returned 200. The supplied [Serverless Inference documentation path](https://docs.vultr.com/products/serverless/inference) redirects to the current [Serverless Inference section](https://docs.vultr.com/products/compute/serverless-inference). `smoke` checks all configured role IDs against the catalog without a key. Add `--chat` only when an inference key is available; that makes one small billed chat request.
 
@@ -120,4 +133,4 @@ Record the VM, image and container ID, bridge/source IP, effective Docker securi
 
 The completed live work used two VMs in Vultr's SJC region: a control VM for inference and the private bank, and a sandbox VM for disposable Docker workers. The earlier [reviewed static snapshot](docs/index.html) records **18 remote `runc` container episodes**: 10 model-driven runs and 8 offline adversarial probes. Seventeen episodes have a verified container action result; one does not. Attack success was **0/18** across those snapshot episodes. The legitimate task completed with containment evidence in **5/10 model runs**; the offline probes are excluded from that task-completion denominator. All episode containers were destroyed. That bank contains four recorded attack/defense patterns spanning D1 egress and dependency lookalikes, D3 resource exhaustion, and D6 secret exfiltration. The model-authored `runc` readiness proof used **three additional episodes in an isolated private bank**; it does not change the 18-episode snapshot's denominator. The subsequent Kata one-round and strict evolution episodes are also outside those denominators.
 
-The historical `runc` wall proof passed 11 container configuration checks, showed successful pinned-host TLS, blocked external DNS and `ptrace`, and counted three probe-specific packets immediately before the final default DROP. The later Kata wall proof adds a separate guest kernel, KVM-backed QEMU, guest seccomp and task-linked microVM cleanup. Neither proof makes a general VM-escape guarantee; a guest kernel narrows shared-kernel exposure. The full transcripts and private bank remain private; the static snapshot contains only reviewed historical aggregate evidence. DSH remains a policy-seam demonstration because its stock tool providers execute allowed actions on the host. The red model chooses from bounded seeded decoys and can add framing; it cannot create arbitrary targets or actions. The blue write path emits validated declarative rules rather than arbitrary executable plugins. Dashboard access is unauthenticated; keep its default loopback binding unless it sits behind an authenticated proxy.
+The historical `runc` wall proof passed 11 container configuration checks, showed successful pinned-host TLS, blocked external DNS and `ptrace`, and counted three probe-specific packets immediately before the final default DROP. The later Kata wall proof adds a separate guest kernel, KVM-backed QEMU, guest seccomp and task-linked microVM cleanup. Neither proof makes a general VM-escape guarantee; a guest kernel narrows shared-kernel exposure. The full transcripts and private bank remain private; the static snapshot contains only reviewed historical aggregate evidence. DSH remains a policy-seam demonstration because its stock tool providers execute allowed actions on the host. The red model chooses from bounded seeded decoys and can add framing; it cannot create arbitrary targets or actions. The blue write path emits validated declarative rules rather than arbitrary executable plugins. The dashboard's HTTP surface has no user login and can request the two fixed tasks when the broker is present; keep its default loopback binding behind the SSH tunnel unless it sits behind an authenticated proxy.

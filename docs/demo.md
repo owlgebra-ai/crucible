@@ -56,7 +56,43 @@ wall proof; it is not raw VM screen footage or footage of the later Kata and
 model-authored readiness runs. The saved private transcripts support a
 separate auditor replay.
 
-## Reproduce the two-VM evidence sequence
+## Start the host agent in the browser
+
+The browser is the launch surface for the deployed VM1 agent. Open a local
+SSH tunnel to the **control VM** and leave that terminal running:
+
+```bash
+ssh -N -L 18787:127.0.0.1:8787 USER@CONTROL_PUBLIC
+```
+
+Open `http://127.0.0.1:18787/`. In **Start the host agent**, choose one of
+the two fixed cases and press **Start task**:
+
+| Choice | What it runs |
+| --- | --- |
+| One agent task | A real Vultr candidate and pre-exec policy process one seeded local-fixture case; any approved action goes to a fresh VM2 Kata guest, followed by a scanned result and report. |
+| Boundary evolution | The strict readiness-pretext before/Blue/fresh-rerun case, with real Vultr candidate and Blue models and a required `kata-qemu` runtime in both episodes. |
+
+The right-side **Agent trajectory** pane opens when the task is queued. Watch
+the VM1 planning and policy phases, VM2 sandbox execution, result review, and
+teardown; the final browser status distinguishes task completion from strict
+model-evolution proof. The browser sends only a fixed case name. It cannot
+submit a prompt, shell command, URL, or scenario file, and the dashboard has
+no inference or worker SSH key. A separate VM1 broker owns those credentials,
+uses the pinned private VPC SSH path, and allows one active browser or CLI
+task at a time. The output shown to the browser is a sanitized status and
+closed-schema trajectory, not the raw model transcript or worker output.
+
+The current application path is implemented with a Python dashboard and
+Python Unix-socket broker. The browser-launch path needs its own end-to-end
+VM replay before it is cited as live evidence. The already recorded Kata wall
+and model-evolution proofs in this runbook came from VM1 CLI runs. The
+[browser architecture](browser-control-architecture.md) gives the trust
+boundaries and verification gate. The screenshot's Next.js/FastAPI and
+Playwright-worker labels are reference concepts; this deployment does not
+claim those components.
+
+## Reproduce the two-VM evidence sequence from the CLI
 
 1. On the sandbox VM, verify the root-owned runtime selection is `kata-qemu`,
    then run
@@ -65,10 +101,9 @@ separate auditor replay.
    runtime, task-linked KVM-backed QEMU, guest-versus-host kernel, guest
    seccomp and limits, successful pinned TLS, denied DNS and `ptrace`, the
    direct-IP probe counter before the final DROP, and task microVM teardown.
-2. Tunnel the control VM's loopback dashboard to the recording laptop using
-   the command in [Dashboard and recording](#dashboard-and-recording). Open it
-   before the remote CLI run so its right-side Agent trajectory pane can open
-   on the task-start event.
+2. Keep the control VM's loopback dashboard open through the tunnel above.
+   Its right-side Agent trajectory pane also follows tasks started by the
+   CLI, so the recorded workflow remains available for detailed replay.
 3. On the control VM, set `CRUCIBLE_REMOTE_TARGET=root@SANDBOX_VPC_IP`,
    `CRUCIBLE_REMOTE_IDENTITY` to the owner-only control key, and
    `CRUCIBLE_REMOTE_KNOWN_HOSTS` to the pinned host-key file. With
@@ -97,7 +132,7 @@ separate auditor replay.
    static snapshot only after reviewing the private bank and complete wall
    proof, following [the public demo guide](public-demo.md).
 
-The Agent trajectory pane updates during
+The Agent trajectory pane updates during browser and CLI runs across
 red planning, worker proposals, pre-exec checks, sandbox execution, result
 review, blue adaptation, and teardown. The pane uses a read-only event stream
 from the private experience database. It shows bounded status facts rather
@@ -191,7 +226,9 @@ recording laptop, open a separate terminal:
 ssh -N -L 8787:127.0.0.1:8787 USER@VM_IP
 ```
 
-Open `http://127.0.0.1:8787` in the laptop browser. Its live safe-outcome
+Open `http://127.0.0.1:8787` in the laptop browser. The deployed dashboard
+can launch the two fixed cases described above and show their live trajectory;
+it also follows CLI tasks. Its live safe-outcome
 curve counts model-driven Docker and remote sandbox VM records with
 `containment_held && task_completed`; offline adversarial probes do not enter
 that denominator. Attack success is counted across all container episodes.
@@ -221,6 +258,7 @@ stop its service:
 
 ```bash
 sudo systemctl stop crucible-dashboard.service
+sudo systemctl stop crucible-task-broker.service
 ```
 
 Confirm no `crucible.managed=true` container remains on the sandbox VM.
