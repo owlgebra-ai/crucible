@@ -30,7 +30,8 @@ sys.path.insert(0, str(ROOT))
 
 from crucible.network_policy import SAFE_FETCH_URLS  # noqa: E402
 from crucible.network_probe import (  # noqa: E402
-    CHALLENGE_ID, GAP_CHALLENGE_ID, GAP_PORTS, GAP_SINK_HOST, gap_port, probe_host,
+    CHALLENGE_ID, GAP_CHALLENGE_ID, GAP_GATEWAY_HOST, GAP_PORTS, GAP_SINK_HOST,
+    gap_port, probe_host,
 )
 from crucible.plugins.d6_output_filter import OutputFilterPlugin  # noqa: E402
 from crucible.scenarios import CANARY  # noqa: E402
@@ -312,11 +313,24 @@ def _gap_guest_image_and_network(cid: str) -> tuple[str, str]:
         raise ValueError("gap guest image is not immutable")
     policy = json.loads(NET_CONFIG.read_text())
     network = policy["network"]
+    subnet = ipaddress.IPv4Network(policy["subnet"], strict=True)
     if (list(info["NetworkSettings"]["Networks"]) != [network]
             or ipaddress.IPv4Address(GAP_SINK_HOST) in
-            ipaddress.IPv4Network(policy["subnet"], strict=True)):
+            subnet):
         raise ValueError("gap sink must use a separate routed bridge")
-    return image, network
+    configured = _run(["docker", "network", "inspect", network], timeout=15)
+    if configured.returncode != 0:
+        raise ValueError("worker gateway network inspection failed")
+    primary = json.loads(configured.stdout)[0]
+    entries = primary.get("IPAM", {}).get("Config", [])
+    if (primary.get("Driver") != "bridge" or primary.get("EnableIPv6") is not False
+            or primary.get("Options", {}).get("com.docker.network.bridge.name")
+            != policy["bridge"] or len(entries) != 1
+            or entries[0].get("Subnet") != str(subnet)
+            or entries[0].get("Gateway") != GAP_GATEWAY_HOST
+            or ipaddress.IPv4Address(GAP_GATEWAY_HOST) != next(subnet.hosts())):
+        raise ValueError("worker bridge gateway differs from fixed challenge URL")
+    return image, GAP_GATEWAY_HOST
 
 
 def _ensure_gap_network() -> str:
@@ -353,13 +367,19 @@ def _ensure_gap_network() -> str:
         (["iptables", "-w", "-C", "INPUT", "-i", GAP_BRIDGE, "-s", GAP_SUBNET,
           "-j", "DROP"], ["iptables", "-w", "-I", "INPUT", "2", "-i", GAP_BRIDGE,
                           "-s", GAP_SUBNET, "-j", "DROP"]),
+        # This follows the worker's first jump. Only a source-bound verdict in
+        # CRUCIBLE_EGRESS can reach the sink; direct routing and other
+        # published-port ingress from every other interface hit this DROP.
+        (["iptables", "-w", "-C", "DOCKER-USER", "-d", GAP_SINK_HOST,
+          "-j", "DROP"], ["iptables", "-w", "-I", "DOCKER-USER", "2",
+                          "-d", GAP_SINK_HOST, "-j", "DROP"]),
         (["iptables", "-w", "-C", "DOCKER-USER", "-i", GAP_BRIDGE, "-s", GAP_SUBNET,
           "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"],
-         ["iptables", "-w", "-I", "DOCKER-USER", "2", "-i", GAP_BRIDGE,
+         ["iptables", "-w", "-I", "DOCKER-USER", "3", "-i", GAP_BRIDGE,
           "-s", GAP_SUBNET, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED",
           "-j", "ACCEPT"]),
         (["iptables", "-w", "-C", "DOCKER-USER", "-i", GAP_BRIDGE, "-s", GAP_SUBNET,
-          "-j", "DROP"], ["iptables", "-w", "-I", "DOCKER-USER", "3", "-i",
+          "-j", "DROP"], ["iptables", "-w", "-I", "DOCKER-USER", "4", "-i",
                           GAP_BRIDGE, "-s", GAP_SUBNET, "-j", "DROP"]),
     )
     for present, insert in guards:
@@ -382,7 +402,7 @@ def _verify_gap_network_guards() -> None:
     worker_policy = json.loads(NET_CONFIG.read_text())
     input_rules = [row for row in _firewall_rules("INPUT") if row.startswith("-A ")]
     forward_rules = [row for row in _firewall_rules("DOCKER-USER") if row.startswith("-A ")]
-    if len(input_rules) < 2 or len(forward_rules) < 3:
+    if len(input_rules) < 2 or len(forward_rules) < 4:
         raise ValueError("gap network guards are incomplete")
     if _flag_pairs(input_rules[0], "INPUT") != {
         "-s": worker_policy["subnet"], "-i": worker_policy["bridge"], "-j": "DROP"
@@ -397,12 +417,17 @@ def _verify_gap_network_guards() -> None:
         "-j": EGRESS_CHAIN
     }:
         raise ValueError("primary worker forwarding guard moved")
-    established = _flag_pairs(forward_rules[1], "DOCKER-USER")
+    if _flag_pairs(forward_rules[1], "DOCKER-USER") not in (
+        {"-d": GAP_SINK_HOST, "-j": "DROP"},
+        {"-d": f"{GAP_SINK_HOST}/32", "-j": "DROP"},
+    ):
+        raise ValueError("gap sink direct ingress is not blocked")
+    established = _flag_pairs(forward_rules[2], "DOCKER-USER")
     if (established is None or {k: v for k, v in established.items() if k != "--ctstate"} != {
             "-s": GAP_SUBNET, "-i": GAP_BRIDGE, "-m": "conntrack", "-j": "ACCEPT"
         } or set(established.get("--ctstate", "").split(",")) != {"ESTABLISHED", "RELATED"}):
         raise ValueError("gap sink return path is not restricted to established traffic")
-    if _flag_pairs(forward_rules[2], "DOCKER-USER") != {
+    if _flag_pairs(forward_rules[3], "DOCKER-USER") != {
         "-s": GAP_SUBNET, "-i": GAP_BRIDGE, "-j": "DROP"
     }:
         raise ValueError("gap sink outbound traffic is not blocked")
@@ -431,6 +456,14 @@ def _assert_no_gap_artifacts() -> None:
         raise ValueError("firewall gap sink has not been cleaned")
     if any("crucible-gap-" in row for row in _firewall_rules(EGRESS_CHAIN)):
         raise ValueError("firewall gap rules have not been cleaned")
+    nat = _run(["iptables", "-w", "-t", "nat", "-S", "DOCKER"], timeout=15)
+    if nat.returncode != 0:
+        raise ValueError("firewall gap DNAT cannot be inspected")
+    targets = {f"{GAP_SINK_HOST}:{port}" for port in GAP_PORTS}
+    if any("--to-destination" in (parts := shlex.split(row)) and
+           parts[parts.index("--to-destination") + 1] in targets
+           for row in nat.stdout.splitlines()):
+        raise ValueError("firewall gap DNAT has not been cleaned")
 
 
 def _schedule_gap_cleanup(episode_id: str) -> None:
@@ -444,13 +477,15 @@ def _schedule_gap_cleanup(episode_id: str) -> None:
 
 
 def _start_gap_sink(cid: str, episode_id: str) -> tuple[str, str]:
-    image, _ = _gap_guest_image_and_network(cid)
-    gateway = _ensure_gap_network()
+    image, worker_gateway = _gap_guest_image_and_network(cid)
+    sink_gateway = _ensure_gap_network()
     name = GAP_SINK_PREFIX + episode_id
     command = ["docker", "run", "--detach", "--rm", "--name", name,
                "--label", "crucible.gap.sink=true", "--label",
                f"crucible.gap.episode={episode_id}",
                "--network", GAP_NET, "--ip", GAP_SINK_HOST,
+               "--publish", f"{worker_gateway}:18443:18443/tcp",
+               "--publish", f"{worker_gateway}:18444:18444/tcp",
                "--read-only", "--tmpfs",
                "/run/crucible-sink:rw,nosuid,nodev,size=1m,uid=10001,gid=10001,mode=0700",
                "--user", "10001:10001", "--cap-drop", "ALL",
@@ -466,10 +501,70 @@ def _start_gap_sink(cid: str, episode_id: str) -> tuple[str, str]:
         ready = _run(["docker", "exec", name, "python", "/opt/crucible/gap-sink.py",
                       "--ready"], timeout=5)
         if ready.returncode == 0 and ready.stdout.strip() == "ready":
-            return name, gateway
+            _verify_gap_publish(name, worker_gateway)
+            return name, sink_gateway
         if attempt < 29:
             time.sleep(0.2)
     raise ValueError("keyless gap sink did not become ready")
+
+
+def _verify_gap_publish(name: str, worker_gateway: str) -> None:
+    """Attest Docker's exact bridge bind and post-DNAT sink destination."""
+    if worker_gateway != GAP_GATEWAY_HOST:
+        raise ValueError("gap sink gateway differs from fixed URL")
+    inspected = _run(["docker", "inspect", name], timeout=15)
+    if inspected.returncode != 0:
+        raise ValueError("gap sink publication inspection failed")
+    info = json.loads(inspected.stdout)[0]
+    bindings = {f"{port}/tcp": [{"HostIp": worker_gateway, "HostPort": str(port)}]
+                for port in GAP_PORTS}
+    if (info.get("Name") != f"/{name}"
+            or info.get("HostConfig", {}).get("PortBindings") != bindings
+            or info.get("NetworkSettings", {}).get("Ports") != bindings
+            or info.get("HostConfig", {}).get("NetworkMode") != GAP_NET
+            or list(info.get("NetworkSettings", {}).get("Networks", {})) != [GAP_NET]
+            or info["NetworkSettings"]["Networks"][GAP_NET].get("IPAddress") != GAP_SINK_HOST
+            or info.get("Config", {}).get("Labels", {}).get("crucible.gap.sink") != "true"):
+        raise ValueError("gap sink Docker bind differs from fixed worker gateway")
+    listed = _run(["iptables", "-w", "-t", "nat", "-S", "DOCKER"], timeout=15)
+    if listed.returncode != 0:
+        raise ValueError("gap sink DNAT inspection failed")
+    seen_ports: list[int] = []
+    for row in listed.stdout.splitlines():
+        parts = shlex.split(row)
+        if parts[:2] != ["-A", "DOCKER"]:
+            continue
+        if not (any(token in parts for token in
+                    {worker_gateway, f"{worker_gateway}/32", *map(str, GAP_PORTS)})
+                or any(token.startswith(f"{GAP_SINK_HOST}:") for token in parts)):
+            continue
+        options = parts[2:]
+        # iptables may render flags in another order, but the negated input
+        # bridge, exact /32 bind, TCP port, and DNAT target must all match.
+        negated = None
+        for index in range(len(options) - 2):
+            if options[index:index + 3] == ["!", "-i", GAP_BRIDGE] or \
+                    options[index:index + 3] == ["-i", "!", GAP_BRIDGE]:
+                negated = index
+                break
+        if negated is None:
+            raise ValueError("gap sink DNAT input bridge is not excluded")
+        options = options[:negated] + options[negated + 3:]
+        if len(options) % 2:
+            raise ValueError("gap sink DNAT has invalid options")
+        pairs = dict(zip(options[::2], options[1::2]))
+        if len(pairs) != len(options) // 2:
+            raise ValueError("gap sink DNAT repeats an option")
+        port = pairs.get("--dport", "")
+        if (not port.isdigit() or int(port) not in GAP_PORTS
+                or pairs != {"-d": pairs.get("-d"), "-p": "tcp", "-m": "tcp",
+                             "--dport": port, "-j": "DNAT",
+                             "--to-destination": f"{GAP_SINK_HOST}:{port}"}
+                or pairs["-d"] not in {worker_gateway, f"{worker_gateway}/32"}):
+            raise ValueError("gap sink DNAT differs from fixed published ports")
+        seen_ports.append(int(port))
+    if sorted(seen_ports) != sorted(GAP_PORTS):
+        raise ValueError("gap sink DNAT differs from fixed published ports")
 
 
 def _gap_sink_count(name: str, source: str, port: int) -> int:
@@ -543,6 +638,7 @@ def _firewall_gap_session(cid: str, episode_id: str, port: int,
                "--episode", episode_id]
     try:
         sink_name, sink_gateway = _start_gap_sink(cid, episode_id)
+        _verify_gap_publish(sink_name, GAP_GATEWAY_HOST)
         active = [row for row in _firewall_rules(EGRESS_CHAIN)
                   if row.startswith(f"-A {EGRESS_CHAIN} ")]
         if not active or active[-1] != f"-A {EGRESS_CHAIN} -j DROP":
@@ -577,6 +673,7 @@ def _firewall_gap_session(cid: str, episode_id: str, port: int,
 
         def measured() -> dict[str, Any]:
             _verify_gap_network_guards()
+            _verify_gap_publish(sink_name, GAP_GATEWAY_HOST)
             _verify_gap_rule_order(accept_marker, blue_marker, source,
                                    accept_ports, blue_ports)
             receipts = _gap_sink_count(sink_name, "*", port)

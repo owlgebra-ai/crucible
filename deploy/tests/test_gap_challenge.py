@@ -12,7 +12,8 @@ import unittest
 from unittest import mock
 
 from crucible.evolver import BlueEvolver, WrittenRule
-from crucible.network_probe import GAP_CHALLENGE_ID, GAP_SINK_HOST, gap_port
+from crucible.network_probe import (GAP_CHALLENGE_ID, GAP_GATEWAY_HOST,
+                                   GAP_SINK_HOST, gap_port)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -54,6 +55,18 @@ class GapChallengeTests(unittest.TestCase):
                                 "files": files})
             run.assert_not_called()
 
+    def test_stale_dnat_blocks_new_guest(self) -> None:
+        nat = (f"-A DOCKER -d {GAP_GATEWAY_HOST}/32 -p tcp --dport 18443 "
+               f"-j DNAT --to-destination {GAP_SINK_HOST}:18443\n")
+        def run(args, **_kwargs):
+            output = nat if args[:4] == ["iptables", "-w", "-t", "nat"] else ""
+            return subprocess.CompletedProcess(args, 0, output, "")
+        with mock.patch.object(gateway, "_run", side_effect=run), \
+                mock.patch.object(gateway, "_firewall_rules",
+                                  return_value=["-A CRUCIBLE_EGRESS -j DROP"]):
+            with self.assertRaisesRegex(ValueError, "DNAT has not been cleaned"):
+                gateway._assert_no_gap_artifacts()
+
     def test_gap_sink_self_expires_even_if_gateway_crashes_before_watchdog(self) -> None:
         server = mock.MagicMock()
         selector = mock.MagicMock()
@@ -69,12 +82,13 @@ class GapChallengeTests(unittest.TestCase):
         self.assertEqual(server.close.call_count, 2)
 
     def test_fixed_urls_and_complete_canonical_model_policy(self) -> None:
-        self.assertEqual(gap_port(f"https://{GAP_SINK_HOST}:18443/fixture-check"), 18443)
-        self.assertEqual(gap_port(f"https://{GAP_SINK_HOST}:18444/fixture-check"), 18444)
-        self.assertIsNone(gap_port(f"https://{GAP_SINK_HOST}:18445/fixture-check"))
+        self.assertEqual(gap_port(f"https://{GAP_GATEWAY_HOST}:18443/fixture-check"), 18443)
+        self.assertEqual(gap_port(f"https://{GAP_GATEWAY_HOST}:18444/fixture-check"), 18444)
+        self.assertIsNone(gap_port(f"https://{GAP_GATEWAY_HOST}:18445/fixture-check"))
+        self.assertIsNone(gap_port(f"https://{GAP_SINK_HOST}:18443/fixture-check"))
         self.assertIsNone(gap_port("https://example.com:18443/fixture-check"))
         action = {"kind": "net_connect", "payload":
-                  {"url": f"https://{GAP_SINK_HOST}:18443/fixture-check"}}
+                  {"url": f"https://{GAP_GATEWAY_HOST}:18443/fixture-check"}}
         self.assertEqual(gateway._check_action(action)[1], "D1")
         self.assertEqual(gateway._check_action(action, challenge_id=GAP_CHALLENGE_ID),
                          (action, None))
@@ -96,6 +110,41 @@ class GapChallengeTests(unittest.TestCase):
         result = gateway._scan_result(raw, gap_proof=host)
         self.assertEqual(result["firewall_blue_drop_packets"], 3)
         self.assertTrue(result["baseline_accept_behind_blue_drop"])
+
+    def test_published_gateway_bind_and_dnat_are_exact(self) -> None:
+        name = "crucible-gap-sink-ep_aaaaaaaaaaaa"
+        bindings = {f"{port}/tcp": [{"HostIp": GAP_GATEWAY_HOST,
+                                     "HostPort": str(port)}]
+                    for port in (18443, 18444)}
+        info = {"Name": "/" + name,
+                "HostConfig": {"PortBindings": bindings,
+                               "NetworkMode": gateway.GAP_NET},
+                "NetworkSettings": {"Ports": bindings, "Networks": {
+                    gateway.GAP_NET: {"IPAddress": GAP_SINK_HOST}}},
+                "Config": {"Labels": {"crucible.gap.sink": "true"}}}
+        # The two valid rows deliberately use different option orders.
+        nat = "\n".join((
+            f"-A DOCKER -d {GAP_GATEWAY_HOST}/32 ! -i {gateway.GAP_BRIDGE} "
+            f"-p tcp -m tcp --dport 18443 -j DNAT "
+            f"--to-destination {GAP_SINK_HOST}:18443",
+            f"-A DOCKER -p tcp --dport 18444 -m tcp -d {GAP_GATEWAY_HOST}/32 "
+            f"-j DNAT --to-destination {GAP_SINK_HOST}:18444 "
+            f"! -i {gateway.GAP_BRIDGE}",
+        )) + "\n"
+        def checked(candidate, rules):
+            return [subprocess.CompletedProcess([], 0, json.dumps([candidate]), ""),
+                    subprocess.CompletedProcess([], 0, rules, "")]
+        with mock.patch.object(gateway, "_run", side_effect=checked(info, nat)):
+            gateway._verify_gap_publish(name, GAP_GATEWAY_HOST)
+        broad = json.loads(json.dumps(info))
+        broad["HostConfig"]["PortBindings"]["18443/tcp"][0]["HostIp"] = "0.0.0.0"
+        with mock.patch.object(gateway, "_run", side_effect=checked(broad, nat)):
+            with self.assertRaisesRegex(ValueError, "Docker bind"):
+                gateway._verify_gap_publish(name, GAP_GATEWAY_HOST)
+        wrong_dnat = nat.replace(f"{GAP_SINK_HOST}:18444", "172.30.81.251:18444")
+        with mock.patch.object(gateway, "_run", side_effect=checked(info, wrong_dnat)):
+            with self.assertRaisesRegex(ValueError, "DNAT"):
+                gateway._verify_gap_publish(name, GAP_GATEWAY_HOST)
 
     def test_gap_rule_order_requires_blue_drop_before_baseline_accept(self) -> None:
         accept = "crucible-gap-ep_aaaaaaaaaaaa-accept"
@@ -138,6 +187,7 @@ class GapChallengeTests(unittest.TestCase):
         sink = "-A INPUT -s 172.30.81.0/24 -i br-crucible-gap -j DROP"
         forward = [
             "-A DOCKER-USER -s 172.30.80.0/24 -i br-crucible -j CRUCIBLE_EGRESS",
+            "-A DOCKER-USER -d 172.30.81.250/32 -j DROP",
             "-A DOCKER-USER -s 172.30.81.0/24 -i br-crucible-gap -m conntrack "
             "--ctstate RELATED,ESTABLISHED -j ACCEPT",
             "-A DOCKER-USER -s 172.30.81.0/24 -i br-crucible-gap -j DROP",
@@ -184,6 +234,7 @@ class GapChallengeTests(unittest.TestCase):
                 mock.patch.object(gateway, "_start_gap_sink", side_effect=start), \
                 mock.patch.object(gateway, "_verify_gap_rule_order", return_value=False), \
                 mock.patch.object(gateway, "_verify_gap_network_guards"), \
+                mock.patch.object(gateway, "_verify_gap_publish"), \
                 mock.patch.object(gateway, "_run", side_effect=run):
             with self.assertRaisesRegex(RuntimeError, "candidate failed"):
                 with gateway._firewall_gap_session("b" * 64, "ep_" + "a" * 12,
@@ -236,6 +287,20 @@ class GapChallengeTests(unittest.TestCase):
             return subprocess.CompletedProcess(args, 0, "", "")
         with mock.patch.object(cleanup.subprocess, "run", side_effect=run):
             self.assertTrue(cleanup.cleanup(episode))
+
+    def test_cleanup_refuses_stale_dnat_without_an_active_sink(self) -> None:
+        episode = "ep_" + "a" * 12
+        nat = (f"-A DOCKER -d {GAP_GATEWAY_HOST}/32 -p tcp --dport 18443 "
+               f"-j DNAT --to-destination {GAP_SINK_HOST}:18443\n")
+        def run(args, **_kwargs):
+            if args[:4] == ["iptables", "-w", "-t", "nat"]:
+                return subprocess.CompletedProcess(args, 0, nat, "")
+            if args[:4] == ["iptables", "-w", "-S", "CRUCIBLE_EGRESS"]:
+                return subprocess.CompletedProcess(args, 0,
+                                                   "-A CRUCIBLE_EGRESS -j DROP\n", "")
+            return subprocess.CompletedProcess(args, 0, "", "")
+        with mock.patch.object(cleanup.subprocess, "run", side_effect=run):
+            self.assertFalse(cleanup.cleanup(episode))
 
 
 if __name__ == "__main__":

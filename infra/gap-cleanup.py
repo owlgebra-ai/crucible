@@ -15,6 +15,8 @@ import subprocess
 
 EPISODE = re.compile(r"ep_[a-f0-9]{12}\Z")
 CHAIN = "CRUCIBLE_EGRESS"
+SINK_IP = "172.30.81.250"
+PORTS = (18443, 18444)
 
 
 def cleanup(episode_id: str) -> bool:
@@ -53,10 +55,26 @@ def cleanup(episode_id: str) -> bool:
                                 timeout=15, check=False)
     verify = subprocess.run(["iptables", "-w", "-S", CHAIN], text=True,
                             capture_output=True, timeout=15, check=False)
+    other_sinks = subprocess.run(["docker", "ps", "-aq", "--no-trunc", "--filter",
+                                  "label=crucible.gap.sink=true"], text=True,
+                                 capture_output=True, timeout=15, check=False)
+    nat = subprocess.run(["iptables", "-w", "-t", "nat", "-S", "DOCKER"],
+                         text=True, capture_output=True, timeout=15, check=False)
+    targets = {f"{SINK_IP}:{port}" for port in PORTS}
+    stale_dnat = False
+    if nat.returncode == 0 and not other_sinks.stdout.strip():
+        for row in nat.stdout.splitlines():
+            parts = shlex.split(row)
+            if ("--to-destination" in parts and
+                    parts[parts.index("--to-destination") + 1] in targets):
+                stale_dnat = True
+                break
     # Two callers can race on the same rule/container. Their individual
     # delete exit codes are not proof; the final absence of both is.
     return (containers.returncode == 0 and not containers.stdout.strip()
             and verify.returncode == 0
+            and other_sinks.returncode == 0 and nat.returncode == 0
+            and not stale_dnat
             and not any(marker in row for row in verify.stdout.splitlines()))
 
 

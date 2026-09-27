@@ -17,7 +17,7 @@ import urllib.request
 from urllib.error import HTTPError
 
 from crucible.network_policy import SAFE_FETCH_URLS
-from crucible.network_probe import GAP_SINK_HOST, gap_port, probe_host
+from crucible.network_probe import GAP_GATEWAY_HOST, gap_port, probe_host
 from crucible.safe_commands import parse_safe_command
 from crucible.secret_scan import DEMO_CANARY, SecretScanner
 
@@ -114,7 +114,7 @@ def execute(action: dict) -> dict:
         host = probe_host(url)
         port = 443 if host is not None else gap_port(url)
         if port is not None and host is None:
-            host = GAP_SINK_HOST
+            host = GAP_GATEWAY_HOST
         if host is None or port is None:
             raise PolicyDenied("D1", "destination is outside fixed network probe")
         try:
