@@ -306,6 +306,7 @@ def _static_html() -> str:
                   flags=re.DOTALL)
     page = re.sub(r"<!-- PRIVATE_LIVE_START -->.*?<!-- PRIVATE_LIVE_END -->", "", page,
                   flags=re.DOTALL)
+    page = re.sub(r"(?m)^[ \t]+$", "", page)
     if "PRIVATE_LIVE_" in page or "/api/trajectory" in page or "trajectory-pane" in page:
         raise ValueError("private live dashboard markup remains in public export")
     page = page.replace("<title>CRUCIBLE · Containment evidence</title>",
@@ -328,12 +329,12 @@ def _static_html() -> str:
     page = page.replace("A Docker record alone is not proof of a kernel block.",
                         "An episode record alone is not proof of a kernel block.")
     page = page.replace(
-        '  <section class="card chart-card"><h2>Outcome across recorded episodes</h2>',
-        '  <section class="card chart-card"><h2>VM wall transcript</h2>\n'
+        '  <section class="card chart-card" id="evidence"><h2>Outcome across recorded episodes</h2>',
+        '  <section class="card chart-card wall-card"><h2>VM wall transcript</h2>\n'
         '    <p id="wall-proof-status" class="empty">No wall proof summary attached.</p>\n'
         '    <p id="wall-proof-detail" class="subtle">The full VM transcript remains private for review.</p>\n'
         '  </section>\n'
-        '  <section class="card chart-card"><h2>Outcome across recorded episodes</h2>')
+        '  <section class="card chart-card" id="evidence"><h2>Outcome across recorded episodes</h2>')
     page = page.replace(
         "      chart(data.curves);",
         "      if (data.wall_proof && data.wall_proof.status === 'checks_passed') {\n"
