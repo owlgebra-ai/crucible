@@ -33,7 +33,7 @@ from crucible.trajectory import TaskBusyError, TrajectoryStore
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_SOCKET = Path("/run/crucible-task/task.sock")
 DEPLOY_LOCK = Path("/var/lock/crucible-deploy.lock")
-_CASES = frozenset({"safe_demo", "readiness_evolution"})
+_CASES = frozenset({"safe_demo", "readiness_evolution", "egress_evolution"})
 _RFC1918 = tuple(ipaddress.IPv4Network(cidr) for cidr in
                  ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
 _TASK = re.compile(r"task_[a-f0-9]{16}\Z")
@@ -103,6 +103,9 @@ def _command(case: str, db_path: Path) -> tuple[list[str], int]:
         return ([sys.executable, "-m", "crucible.elicitation", "--execution", "remote",
                  "--max-attempts", "3", "--require-model-blue", "--require-runtime",
                  "kata-qemu", "--trajectory-db", str(db_path)], 1800)
+    if case == "egress_evolution":
+        return ([sys.executable, "-m", "crucible.egress_evolution", "--max-attempts", "3",
+                 "--trajectory-db", str(db_path)], 1800)
     raise ValueError("unsupported task case")
 
 
@@ -239,7 +242,8 @@ class TaskManager:
                     self._process = None
                     if self._job is not None and self._job["task_id"] == task_id:
                         self._job["status"] = "complete" if succeeded and persisted else "failed"
-                        self._job["proof_complete"] = (succeeded if case == "readiness_evolution" else None)
+                        self._job["proof_complete"] = (succeeded if case in
+                                                      {"readiness_evolution", "egress_evolution"} else None)
                         self._job["task_completed"] = (succeeded if case == "safe_demo" else None)
                         self._job["finished_at"] = _timestamp()
 

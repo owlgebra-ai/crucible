@@ -184,6 +184,88 @@ class GatewayTests(unittest.TestCase):
         self.assertIsNone(action)
         self.assertEqual(denial, "D3")
 
+    def test_network_probe_requires_trusted_challenge_and_fixed_destination(self) -> None:
+        first = {"kind": "net_connect", "payload":
+                 {"url": "https://203.0.113.10:443/fixture-check"}}
+        self.assertEqual(gateway._check_action(first)[1], "D1")
+        self.assertEqual(gateway._check_action(first, challenge_id="wrong")[1], "D1")
+        self.assertEqual(gateway._check_action(first, challenge_id="egress_probe_v1"),
+                         (first, None))
+        for url in ("https://203.0.113.12:443/fixture-check",
+                    "https://203.0.113.10:443/fixture-check?x=1",
+                    "https://203.0.113.10:444/fixture-check"):
+            action = {"kind": "net_connect", "payload": {"url": url}}
+            self.assertEqual(gateway._check_action(action, challenge_id="egress_probe_v1")[1], "D1")
+        with self.assertRaisesRegex(ValueError, "only valid"):
+            gateway.handle({"op": "exec", "episode_id": "ep_" + "a" * 12,
+                            "container_id": "b" * 64, "challenge_id": "egress_probe_v1",
+                            "action": {"kind": "file_read", "payload":
+                                       {"path": "/work/scenario/reference.txt"}}})
+
+    def test_gateway_proof_is_host_measured_not_worker_claimed(self) -> None:
+        raw = {"exit_code": 1, "stdout": "", "stderr": "network connection blocked",
+               "network_request_attempted": True, "network_response_received": False,
+               "egress_drop_packets": 999999}
+        self.assertNotIn("egress_drop_packets", gateway._scan_result(raw))
+        self.assertEqual(gateway._scan_result(raw, drop_packets=3)["egress_drop_packets"], 3)
+        request = {"op": "exec", "episode_id": "ep_" + "a" * 12,
+                   "container_id": "b" * 64, "challenge_id": "egress_probe_v1",
+                   "action": {"kind": "net_connect", "payload":
+                              {"url": "https://203.0.113.10:443/fixture-check"}}}
+        output = json.dumps(raw) + "\n"
+        with mock.patch.object(gateway, "_configured_runtime", return_value="kata-qemu"), \
+                mock.patch.object(gateway, "_session_matches", return_value=True), \
+                mock.patch.object(gateway, "_create_lock", return_value=nullcontext()), \
+                mock.patch.object(gateway, "_probe_firewall_trace",
+                                  return_value=nullcontext(lambda: 3)) as trace, \
+                mock.patch.object(gateway, "_run", return_value=
+                                  subprocess.CompletedProcess([], 0, output, "")) as runner:
+            result = gateway.handle(request)["result"]
+        trace.assert_called_once_with("b" * 64, "ep_" + "a" * 12, "203.0.113.10")
+        self.assertEqual(result["egress_drop_packets"], 3)
+        self.assertFalse(result["network_response_received"])
+        runner.assert_called_once()
+
+    def test_firewall_trace_requires_final_drop_and_source_specific_counter(self) -> None:
+        marker = "crucible-ep_aaaaaaaaaaaa"
+        rows = [
+            "-A CRUCIBLE_EGRESS -s 172.30.80.2/32 -d 203.0.113.10/32 -p tcp "
+            "-m tcp --dport 443 -m comment --comment " + marker,
+            "-A CRUCIBLE_EGRESS -j DROP",
+        ]
+        with mock.patch.object(gateway, "_firewall_rules", return_value=rows):
+            gateway._check_trace_rule("172.30.80.2", "203.0.113.10", marker)
+        with mock.patch.object(gateway, "_firewall_rules", return_value=rows[:-1]):
+            with self.assertRaisesRegex(ValueError, "final DROP"):
+                gateway._check_trace_rule("172.30.80.2", "203.0.113.10", marker)
+        listing = subprocess.CompletedProcess([], 0,
+            "num pkts bytes target prot opt in out source destination\n"
+            "3 4 240  tcp -- * * 172.30.80.2 203.0.113.10 tcp dpt:443 "
+            "/* " + marker + " */\n", "")
+        with mock.patch.object(gateway, "_run", return_value=listing):
+            self.assertEqual(gateway._probe_drop_count(marker), 4)
+
+    def test_firewall_trace_is_removed_even_if_worker_fails(self) -> None:
+        cid = "b" * 64
+        episode = "ep_" + "a" * 12
+        forward = "-A DOCKER-USER -i br-crucible -s 172.30.80.0/24 -j CRUCIBLE_EGRESS"
+        egress = ["-A CRUCIBLE_EGRESS -d 1.2.3.4/32 -p tcp --dport 443 -j ACCEPT",
+                  "-A CRUCIBLE_EGRESS -j DROP"]
+        def rules(chain):
+            return [forward] if chain == "DOCKER-USER" else egress
+        done = subprocess.CompletedProcess([], 0, "", "")
+        with mock.patch.object(gateway, "_probe_source_ip", return_value=(
+                "172.30.80.2", "172.30.80.0/24", "br-crucible")), \
+                mock.patch.object(gateway, "_firewall_rules", side_effect=rules), \
+                mock.patch.object(gateway, "_check_trace_rule"), \
+                mock.patch.object(gateway, "_run", return_value=done) as runner:
+            with self.assertRaisesRegex(RuntimeError, "worker failed"):
+                with gateway._probe_firewall_trace(cid, episode, "203.0.113.10"):
+                    raise RuntimeError("worker failed")
+        commands = [call.args[0] for call in runner.call_args_list]
+        self.assertEqual(commands[0][:5], ["iptables", "-w", "-I", "CRUCIBLE_EGRESS", "2"])
+        self.assertEqual(commands[1][:4], ["iptables", "-w", "-D", "CRUCIBLE_EGRESS"])
+
     def test_judge_destructive_command_is_denied_before_container_runner(self) -> None:
         action = {"kind": "shell", "payload": {"cmd": " ".join(("rm", "-rf", "/"))}}
         request = {"op": "exec", "episode_id": "ep_" + "a" * 12,

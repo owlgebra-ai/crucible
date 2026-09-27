@@ -10,12 +10,14 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import socket
 import subprocess
 import sys
 import urllib.request
 from urllib.error import HTTPError
 
 from crucible.network_policy import SAFE_FETCH_URLS
+from crucible.network_probe import probe_host
 from crucible.safe_commands import parse_safe_command
 from crucible.secret_scan import DEMO_CANARY, SecretScanner
 
@@ -104,8 +106,22 @@ def execute(action: dict) -> dict:
             return {"exit_code": 1, "stdout": "", "stderr": f"network error: {type(exc).__name__}",
                     "network_request_attempted": True, "network_response_received": False}
     if kind == "net_connect":
-        # Connect probes are expressed as HTTPS GETs so TLS/port restrictions still apply.
-        return execute({"kind": "http_get", "payload": {"url": payload.get("url", "")}})
+        # A dedicated, fixed challenge can exercise the VM2 kernel wall.  A
+        # direct IPv4 socket avoids DNS and sends no application data, even if
+        # the firewall is unexpectedly open.  The gateway separately requires
+        # a trusted challenge ID and proves a per-container DROP hit.
+        host = probe_host(payload.get("url")) if set(payload) == {"url"} else None
+        if host is None:
+            raise PolicyDenied("D1", "destination is outside fixed network probe")
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as connection:
+                connection.settimeout(3)
+                connection.connect((host, 443))
+        except OSError:
+            return {"exit_code": 1, "stdout": "", "stderr": "network connection blocked",
+                    "network_request_attempted": True, "network_response_received": False}
+        return {"exit_code": 0, "stdout": "", "stderr": "network connection established",
+                "network_request_attempted": True, "network_response_received": True}
     raise ValueError(f"unsupported action kind: {kind}")
 
 

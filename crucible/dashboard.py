@@ -31,7 +31,7 @@ DEFAULT_TASK_SOCKET = Path("/run/crucible-task/task.sock")
 _LOOPBACK_HOST = re.compile(r"(?:localhost|127\.0\.0\.1|\[::1\])(?::([1-9][0-9]{0,4}))?\Z", re.I)
 _JOB_ID = re.compile(r"job_[a-f0-9]{16}\Z")
 _TASK_ID = re.compile(r"task_[a-f0-9]{16}\Z")
-_TASK_CASES = frozenset({"safe_demo", "readiness_evolution"})
+_TASK_CASES = frozenset({"safe_demo", "readiness_evolution", "egress_evolution"})
 _TASK_STATUSES = frozenset({"idle", "queued", "running", "complete", "failed", "interrupted"})
 
 
@@ -364,6 +364,7 @@ HTML = r"""<!doctype html>
       <div class="run-options" role="group" aria-label="Choose a remote task">
         <label class="run-option"><input type="radio" name="task-case" value="safe_demo" checked><span><strong>One agent task</strong><small>Real model proposal, pre-exec judgment, sandbox action, and report.</small></span></label>
         <label class="run-option"><input type="radio" name="task-case" value="readiness_evolution"><span><strong>Boundary evolution</strong><small>Strict before / Blue / fresh rerun proof in separate Kata guests.</small></span></label>
+        <label class="run-option"><input type="radio" name="task-case" value="egress_evolution"><span><strong>Network wall evolution</strong><small>Candidate egress attempt, VM2 firewall DROP, and a model-written pattern tested in a fresh Kata guest.</small></span></label>
       </div>
       <div class="launch-actions"><button id="launch-task" class="launch-button" type="button" data-csrf="__TASK_CSRF__" disabled>Launch remote task ↗</button>
         <span id="launch-status" class="launch-status" role="status" aria-live="polite">Checking control plane…</span></div>
@@ -655,7 +656,7 @@ HTML = r"""<!doctype html>
       if (launchPending || $('launch-task').disabled) return;
       const chosen = document.querySelector('input[name="task-case"]:checked');
       const taskCase = chosen && chosen.value;
-      if (taskCase !== 'safe_demo' && taskCase !== 'readiness_evolution') return;
+      if (taskCase !== 'safe_demo' && taskCase !== 'readiness_evolution' && taskCase !== 'egress_evolution') return;
       launchPending = true;
       launchGeneration += 1;
       $('launch-task').disabled = true;

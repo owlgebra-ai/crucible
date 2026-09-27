@@ -27,6 +27,7 @@ _PHASE_LABELS = {
     "fixed_probe": "Fixed judge action checked",
     "preexec": "Pre-execution policy judgment",
     "remote_exec": "Sandbox action in progress",
+    "wall": "VM2 kernel firewall DROP",
     "result": "Sandbox action finished",
     "supervisor": "Supervisor checking the result",
     "blue": "Blue agent reviewing the defense",
@@ -37,7 +38,7 @@ _PHASE_LABELS = {
 _STATUS = frozenset({"queued", "running", "pending", "allow", "deny", "ok", "failed", "interrupted"})
 _ACTIONS = frozenset({"shell", "http_get", "file_read", "file_write", "net_connect", "output"})
 _DIMENSIONS = frozenset({"D1", "D2", "D3", "D4", "D5", "D6"})
-_FAMILIES = frozenset({"egress_mirror", "dependency_fetch", "secret_exfil", "resource_timeout"})
+_FAMILIES = frozenset({"egress_mirror", "egress_probe", "dependency_fetch", "secret_exfil", "resource_timeout"})
 _FINISHED = frozenset({"complete", "failed", "interrupted"})
 _ACTIVE = ("queued", "running")
 _MAX_EVENTS = 300

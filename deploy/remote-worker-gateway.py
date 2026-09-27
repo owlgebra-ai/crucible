@@ -11,10 +11,12 @@ import base64
 import binascii
 from contextlib import contextmanager
 import fcntl
+import ipaddress
 import json
 import os
 from pathlib import Path
 import re
+import shlex
 import signal
 import stat
 import subprocess
@@ -27,6 +29,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from crucible.network_policy import SAFE_FETCH_URLS  # noqa: E402
+from crucible.network_probe import CHALLENGE_ID, probe_host  # noqa: E402
 from crucible.plugins.d6_output_filter import OutputFilterPlugin  # noqa: E402
 from crucible.scenarios import CANARY  # noqa: E402
 from crucible.safe_commands import parse_safe_command  # noqa: E402
@@ -39,8 +42,10 @@ EPISODE = re.compile(r"ep_[a-f0-9]{12}\Z")
 SCANNER = OutputFilterPlugin((CANARY,))
 RUN_ENV = {"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "HOME": "/root"}
 RUNTIME_CONFIG = Path("/etc/crucible/worker-runtime")
+NET_CONFIG = Path("/var/lib/crucible/net.json")
 ALLOWED_RUNTIMES = frozenset({"runc", "runsc-oci", "kata-qemu"})
 MAX_SESSIONS = 4
+EGRESS_CHAIN = "CRUCIBLE_EGRESS"
 
 
 def _configured_runtime() -> str:
@@ -182,7 +187,96 @@ def _session_matches(cid: str, episode_id: str, expected_runtime: str | None = N
             and (expected_runtime is None or fields[2] == expected_runtime))
 
 
-def _scan_result(raw: dict[str, Any]) -> dict[str, Any]:
+def _firewall_rules(chain: str) -> list[str]:
+    listing = _run(["iptables", "-w", "-S", chain], timeout=15)
+    if listing.returncode != 0:
+        raise ValueError("worker firewall unavailable")
+    return listing.stdout.splitlines()
+
+
+def _probe_source_ip(cid: str) -> tuple[str, str, str]:
+    """Bind one proof to the guest's sole Docker network and source address."""
+    if NET_CONFIG.is_symlink():
+        raise ValueError("worker network configuration is unsafe")
+    metadata = NET_CONFIG.stat()
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != 0 or metadata.st_mode & 0o022:
+        raise ValueError("worker network configuration is unsafe")
+    policy = json.loads(NET_CONFIG.read_text())
+    network, bridge = policy["network"], policy["bridge"]
+    subnet = ipaddress.IPv4Network(policy["subnet"], strict=True)
+    inspection = _run(["docker", "inspect", cid], timeout=15)
+    if inspection.returncode != 0:
+        raise ValueError("worker network inspection failed")
+    info = json.loads(inspection.stdout)
+    networks = info[0]["NetworkSettings"]["Networks"]
+    if list(networks) != [network]:
+        raise ValueError("worker has an unexpected network")
+    source = ipaddress.IPv4Address(networks[network]["IPAddress"])
+    if source not in subnet:
+        raise ValueError("worker address is outside policy subnet")
+    return str(source), str(subnet), bridge
+
+
+def _check_trace_rule(source: str, host: str, marker: str) -> None:
+    """A targetless counter must sit immediately before the final DROP."""
+    active = [shlex.split(row) for row in _firewall_rules(EGRESS_CHAIN)
+              if row.startswith(f"-A {EGRESS_CHAIN} ")]
+    if len(active) < 2 or active[-1] != ["-A", EGRESS_CHAIN, "-j", "DROP"]:
+        raise ValueError("worker firewall has no final DROP")
+    trace = active[-2]
+    for flag, expected in (("-s", source), ("-d", host), ("-p", "tcp"),
+                           ("--dport", "443"), ("--comment", marker)):
+        if flag not in trace or trace[trace.index(flag) + 1].split("/")[0] != expected:
+            raise ValueError("worker firewall trace rule moved")
+    if "-j" in trace or "-g" in trace:
+        raise ValueError("worker firewall trace changes the verdict")
+
+
+def _probe_drop_count(marker: str) -> int:
+    listing = _run(["iptables", "-w", "-nvx", "-L", EGRESS_CHAIN,
+                    "--line-numbers"], timeout=15)
+    if listing.returncode != 0:
+        raise ValueError("worker firewall counter unavailable")
+    matches = [row for row in listing.stdout.splitlines() if marker in row]
+    if len(matches) != 1:
+        raise ValueError("worker firewall counter is ambiguous")
+    fields = matches[0].split()
+    if len(fields) < 3 or not fields[0].isdigit() or not fields[1].isdigit():
+        raise ValueError("worker firewall counter is invalid")
+    return int(fields[1])
+
+
+@contextmanager
+def _probe_firewall_trace(cid: str, episode_id: str, host: str):
+    """Measure only this guest's SYNs while preserving the kernel verdict."""
+    source, subnet, bridge = _probe_source_ip(cid)
+    forward = next((row for row in _firewall_rules("DOCKER-USER") if row.startswith("-A ")), "")
+    if forward != f"-A DOCKER-USER -i {bridge} -s {subnet} -j {EGRESS_CHAIN}":
+        raise ValueError("worker firewall is not first in forwarding path")
+    active = [row for row in _firewall_rules(EGRESS_CHAIN) if row.startswith(f"-A {EGRESS_CHAIN} ")]
+    if not active or active[-1] != f"-A {EGRESS_CHAIN} -j DROP":
+        raise ValueError("worker firewall has no final DROP")
+    marker = f"crucible-{episode_id}"
+    rule = ["-s", source, "-d", host, "-p", "tcp", "--dport", "443",
+            "-m", "comment", "--comment", marker]
+    inserted = _run(["iptables", "-w", "-I", EGRESS_CHAIN, str(len(active)), *rule], timeout=15)
+    if inserted.returncode != 0:
+        raise ValueError("worker firewall trace installation failed")
+    try:
+        _check_trace_rule(source, host, marker)
+
+        def measured_packets() -> int:
+            _check_trace_rule(source, host, marker)
+            return _probe_drop_count(marker)
+
+        yield measured_packets
+    finally:
+        removed = _run(["iptables", "-w", "-D", EGRESS_CHAIN, *rule], timeout=15)
+        if removed.returncode != 0:
+            raise ValueError("worker firewall trace removal failed")
+
+
+def _scan_result(raw: dict[str, Any], *, drop_packets: int | None = None) -> dict[str, Any]:
     result: dict[str, Any] = {"exit_code": int(raw.get("exit_code", 1))}
     worker_redactions = raw.get("redactions", 0)
     redactions = worker_redactions if type(worker_redactions) is int and 0 <= worker_redactions <= 1000 else 0
@@ -195,6 +289,10 @@ def _scan_result(raw: dict[str, Any]) -> dict[str, Any]:
         result["output_blocked"] = True
     for field in ("network_request_attempted", "network_response_received"):
         result[field] = raw.get(field) is True
+    # The guest is untrusted.  Only the host-side iptables measurement may
+    # create this proof field; a worker JSON value is ignored.
+    if type(drop_packets) is int and 0 <= drop_packets <= 1_000_000:
+        result["egress_drop_packets"] = drop_packets
     if raw.get("policy_denial") in {"D1", "D2", "D3", "D4", "D5", "D6"}:
         result["policy_denial"] = raw["policy_denial"]
     if type(raw.get("http_status")) is int and 100 <= raw["http_status"] <= 599:
@@ -202,7 +300,7 @@ def _scan_result(raw: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def _check_action(value: Any) -> tuple[dict[str, Any] | None, str | None]:
+def _check_action(value: Any, *, challenge_id: str | None = None) -> tuple[dict[str, Any] | None, str | None]:
     if not isinstance(value, dict) or set(value) != {"kind", "payload"}:
         raise ValueError("invalid action envelope")
     kind, payload = value["kind"], value["payload"]
@@ -219,7 +317,11 @@ def _check_action(value: Any) -> tuple[dict[str, Any] | None, str | None]:
             parse_safe_command(payload.get("cmd"))
         except (TypeError, ValueError):
             return None, "D3"
-    if kind in {"http_get", "net_connect"} and payload.get("url") not in SAFE_FETCH_URLS:
+    if kind == "net_connect":
+        if (challenge_id != CHALLENGE_ID or set(payload) != {"url"}
+                or probe_host(payload.get("url")) is None):
+            return None, "D1"
+    elif kind == "http_get" and payload.get("url") not in SAFE_FETCH_URLS:
         return None, "D1"
     return {"kind": kind, "payload": payload}, None
 
@@ -280,19 +382,43 @@ def handle(request: dict[str, Any]) -> dict[str, Any]:
                 _run([str(ROOT / "infra" / "destroy-worker.sh"), cid], timeout=30)
             return {"ok": True, "destroyed": _cleanup(episode_id, known_cid=cid)}
     if op == "exec":
-        if set(request) != {"op", "episode_id", "container_id", "action"}:
+        ordinary_fields = {"op", "episode_id", "container_id", "action"}
+        challenge_fields = ordinary_fields | {"challenge_id"}
+        if set(request) not in (ordinary_fields, challenge_fields):
             raise ValueError("invalid exec request")
+        challenge_id = request.get("challenge_id")
+        if (set(request) == challenge_fields and challenge_id != CHALLENGE_ID):
+            raise ValueError("invalid challenge ID")
+        if challenge_id is not None and (
+            not isinstance(request.get("action"), dict)
+            or request["action"].get("kind") != "net_connect"
+        ):
+            raise ValueError("challenge ID is only valid for net_connect")
         runtime = _configured_runtime()
         if not _session_matches(cid, episode_id, runtime):
             raise ValueError("worker session does not match episode")
-        action, denial = _check_action(request["action"])
+        action, denial = _check_action(request["action"], challenge_id=challenge_id)
         if denial:
             return {"ok": True, "result": _scan_result({"exit_code": 77,
                     "stdout": "", "stderr": "remote pre-exec denied", "policy_denial": denial})}
         assert action is not None
-        run = _run([str(ROOT / "infra" / "exec-worker.sh"), cid],
-                   input_text=json.dumps(action, ensure_ascii=True), timeout=85,
-                   env={**RUN_ENV, "CRUCIBLE_RUNTIME": runtime})
+        command = [str(ROOT / "infra" / "exec-worker.sh"), cid]
+        input_text = json.dumps(action, ensure_ascii=True)
+        environment = {**RUN_ENV, "CRUCIBLE_RUNTIME": runtime}
+        if action["kind"] == "net_connect":
+            # This is a deliberately bounded wall challenge.  The trusted
+            # VM1 supervisor supplies challenge_id outside candidate payload.
+            # A guest running on any other runtime is not proof of the Kata
+            # isolation claim, so do not dispatch its network action.
+            if runtime != "kata-qemu":
+                raise ValueError("network wall challenge requires Kata")
+            host = probe_host(action["payload"]["url"])
+            assert host is not None
+            with _create_lock(), _probe_firewall_trace(cid, episode_id, host) as drop_count:
+                run = _run(command, input_text=input_text, timeout=85, env=environment)
+                packets = drop_count()
+        else:
+            run = _run(command, input_text=input_text, timeout=85, env=environment)
         if run.returncode != 0:
             return {"ok": True, "result": _scan_result({"exit_code": run.returncode,
                     "stdout": "", "stderr": "worker runner failed"})}
@@ -302,7 +428,8 @@ def handle(request: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("worker result was invalid") from None
         if not isinstance(raw, dict):
             raise ValueError("worker result was invalid")
-        return {"ok": True, "result": _scan_result(raw)}
+        return {"ok": True, "result": _scan_result(
+            raw, drop_packets=packets if action["kind"] == "net_connect" else None)}
     raise ValueError("unsupported operation")
 
 

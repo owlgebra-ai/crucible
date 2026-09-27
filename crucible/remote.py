@@ -133,11 +133,17 @@ class RemoteWorkerClient:
         """Return the gateway-attested runtime for a created session."""
         return self._runtime_by_cid.get(cid)
 
-    def execute(self, cid: str, episode_id: str, action: dict[str, Any]) -> dict[str, Any]:
+    def execute(self, cid: str, episode_id: str, action: dict[str, Any], *,
+                challenge_id: str | None = None) -> dict[str, Any]:
         if not _CID.fullmatch(cid) or not _EPISODE.fullmatch(episode_id):
             raise ValueError("invalid remote session ID")
-        response = self._call({"op": "exec", "container_id": cid,
-                               "episode_id": episode_id, "action": action}, timeout=95)
+        request = {"op": "exec", "container_id": cid,
+                   "episode_id": episode_id, "action": action}
+        if challenge_id is not None:
+            if challenge_id != "egress_probe_v1":
+                raise ValueError("invalid remote challenge ID")
+            request["challenge_id"] = challenge_id
+        response = self._call(request, timeout=95)
         result = response.get("result")
         if not isinstance(result, dict):
             raise RemoteError("remote gateway returned an invalid worker result")
