@@ -112,6 +112,54 @@ class GatewayTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "already in use"):
                 gateway._ensure_capacity(episode)
 
+    def test_truncated_docker_ids_cannot_bypass_capacity_or_cleanup(self) -> None:
+        episode = "ep_" + "a" * 12
+        truncated = subprocess.CompletedProcess([], 0, "b" * 12 + "\n", "")
+        with mock.patch.object(gateway, "_run", return_value=truncated) as run:
+            with self.assertRaisesRegex(ValueError, "cannot inspect worker capacity"):
+                gateway._ensure_capacity(episode)
+            self.assertIn("--no-trunc", run.call_args.args[0])
+        with mock.patch.object(gateway, "_run", return_value=truncated) as run:
+            self.assertFalse(gateway._cleanup(episode))
+            self.assertIn("--no-trunc", run.call_args.args[0])
+            run.assert_called_once()
+
+    def test_kata_cleanup_requires_vm_teardown_after_container_removal(self) -> None:
+        episode = "ep_" + "a" * 12
+        cid = "b" * 64
+        done = lambda output="", code=0: subprocess.CompletedProcess([], code, output, "")
+        results = [done(cid + "\n"), done("kata-qemu\n"), done(), done(), done(code=77)]
+        with mock.patch.object(gateway, "_configured_runtime", return_value="kata-qemu"), \
+                mock.patch.object(gateway, "_run", side_effect=results) as run:
+            self.assertFalse(gateway._cleanup(episode, known_cid=cid))
+        commands = [call.args[0] for call in run.call_args_list]
+        self.assertEqual(commands[2], ["docker", "rm", "-f", cid])
+        self.assertEqual(commands[-1][-2:], ["--destroyed", cid])
+
+        results[-1] = done("kata-qemu microVM teardown: OK\n")
+        with mock.patch.object(gateway, "_configured_runtime", return_value="kata-qemu"), \
+                mock.patch.object(gateway, "_run", side_effect=results):
+            self.assertTrue(gateway._cleanup(episode, known_cid=cid))
+
+    def test_kata_cleanup_without_task_id_does_not_claim_vm_teardown(self) -> None:
+        episode = "ep_" + "a" * 12
+        done = subprocess.CompletedProcess([], 0, "", "")
+        with mock.patch.object(gateway, "_configured_runtime", return_value="kata-qemu"), \
+                mock.patch.object(gateway, "_run", return_value=done) as run:
+            self.assertFalse(gateway._cleanup(episode))
+            self.assertEqual(run.call_count, 2)
+
+    def test_destroy_passes_full_task_id_to_cleanup(self) -> None:
+        episode = "ep_" + "a" * 12
+        cid = "b" * 64
+        with mock.patch.object(gateway, "_session_matches", return_value=True), \
+                mock.patch.object(gateway, "_create_lock", return_value=nullcontext()), \
+                mock.patch.object(gateway, "_run", return_value=subprocess.CompletedProcess([], 0, "", "")), \
+                mock.patch.object(gateway, "_cleanup", return_value=False) as cleanup:
+            response = gateway.handle({"op": "destroy", "episode_id": episode, "container_id": cid})
+        self.assertFalse(response["destroyed"])
+        cleanup.assert_called_once_with(episode, known_cid=cid)
+
     def test_capacity_is_checked_before_container_creation(self) -> None:
         files = {name: "eA==" for name in ("scenario.json", "README.md", "reference.txt")}
         with mock.patch.object(gateway, "_configured_runtime", return_value="runc"), \

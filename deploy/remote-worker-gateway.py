@@ -77,17 +77,55 @@ def _run(args: list[str], *, input_text: str | None = None, timeout: int = 30,
     return subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
 
 
-def _cleanup(episode_id: str) -> bool:
+def _full_container_ids(result: subprocess.CompletedProcess[str]) -> list[str] | None:
+    """Reject truncated Docker IDs so cleanup and capacity cannot miss workers."""
+    if result.returncode != 0:
+        return None
+    ids = result.stdout.splitlines()
+    if any(not CID.fullmatch(cid) for cid in ids):
+        return None
+    return ids
+
+
+def _cleanup(episode_id: str, known_cid: str | None = None) -> bool:
     if not EPISODE.fullmatch(episode_id):
         return False
-    listing = _run(["docker", "ps", "-aq", "--filter", f"label=crucible.episode={episode_id}"], timeout=20)
-    if listing.returncode != 0:
+    if known_cid is not None and not CID.fullmatch(known_cid):
         return False
-    ids = [line for line in listing.stdout.splitlines() if CID.fullmatch(line)]
+    listing = _run(["docker", "ps", "-aq", "--no-trunc", "--filter",
+                    f"label=crucible.episode={episode_id}"], timeout=20)
+    ids = _full_container_ids(listing)
+    if ids is None:
+        return False
+    kata_ids: set[str] = set()
+    for cid in ids:
+        runtime = _run(["docker", "inspect", "--format", "{{.HostConfig.Runtime}}", cid], timeout=15)
+        if runtime.returncode != 0 or runtime.stdout.strip() not in ALLOWED_RUNTIMES:
+            return False
+        if runtime.stdout.strip() == "kata-qemu":
+            kata_ids.add(cid)
+    try:
+        selected_runtime = _configured_runtime()
+    except ValueError:
+        selected_runtime = None
+    if selected_runtime == "kata-qemu" and known_cid is not None:
+        kata_ids.add(known_cid)
     if ids and _run(["docker", "rm", "-f", *ids], timeout=30).returncode != 0:
         return False
-    verify = _run(["docker", "ps", "-aq", "--filter", f"label=crucible.episode={episode_id}"], timeout=20)
-    return verify.returncode == 0 and not verify.stdout.strip()
+    verify = _run(["docker", "ps", "-aq", "--no-trunc", "--filter",
+                   f"label=crucible.episode={episode_id}"], timeout=20)
+    if _full_container_ids(verify) != []:
+        return False
+    # A cleanup request without a CID cannot attest an already-removed Kata
+    # VM. The caller must retry destroy with its known full task ID.
+    if selected_runtime == "kata-qemu" and not kata_ids:
+        return False
+    for cid in kata_ids:
+        proof = _run([sys.executable, str(ROOT / "infra" / "verify-kata.py"),
+                      "--destroyed", cid], timeout=30)
+        if proof.returncode != 0:
+            return False
+    return True
 
 
 @contextmanager
@@ -103,14 +141,19 @@ def _create_lock():
 
 
 def _ensure_capacity(episode_id: str) -> None:
-    existing = _run(["docker", "ps", "-aq", "--filter", "label=crucible.managed=true"], timeout=20)
-    if existing.returncode != 0:
+    existing = _run(["docker", "ps", "-aq", "--no-trunc", "--filter",
+                     "label=crucible.managed=true"], timeout=20)
+    ids = _full_container_ids(existing)
+    if ids is None:
         raise ValueError("cannot inspect worker capacity")
-    ids = [line for line in existing.stdout.splitlines() if CID.fullmatch(line)]
     if len(ids) >= MAX_SESSIONS:
         raise ValueError("remote worker capacity reached")
-    collision = _run(["docker", "ps", "-aq", "--filter", f"label=crucible.episode={episode_id}"], timeout=20)
-    if collision.returncode != 0 or collision.stdout.strip():
+    collision = _run(["docker", "ps", "-aq", "--no-trunc", "--filter",
+                      f"label=crucible.episode={episode_id}"], timeout=20)
+    collision_ids = _full_container_ids(collision)
+    if collision_ids is None:
+        raise ValueError("cannot inspect episode collision")
+    if collision_ids:
         raise ValueError("episode label is already in use")
 
 
@@ -213,16 +256,18 @@ def handle(request: dict[str, Any]) -> dict[str, Any]:
     if op == "cleanup":
         if set(request) != {"op", "episode_id"}:
             raise ValueError("invalid cleanup request")
-        return {"ok": True, "destroyed": _cleanup(episode_id)}
+        with _create_lock():
+            return {"ok": True, "destroyed": _cleanup(episode_id)}
     cid = request.get("container_id", "")
     if not isinstance(cid, str) or not CID.fullmatch(cid):
         raise ValueError("invalid container ID")
     if op == "destroy":
         if set(request) != {"op", "episode_id", "container_id"}:
             raise ValueError("invalid destroy request")
-        if _session_matches(cid, episode_id):
-            _run([str(ROOT / "infra" / "destroy-worker.sh"), cid], timeout=30)
-        return {"ok": True, "destroyed": _cleanup(episode_id)}
+        with _create_lock():
+            if _session_matches(cid, episode_id):
+                _run([str(ROOT / "infra" / "destroy-worker.sh"), cid], timeout=30)
+            return {"ok": True, "destroyed": _cleanup(episode_id, known_cid=cid)}
     if op == "exec":
         if set(request) != {"op", "episode_id", "container_id", "action"}:
             raise ValueError("invalid exec request")
