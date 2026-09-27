@@ -622,9 +622,11 @@ HTML = r"""<!doctype html>
           setTrajectoryOpen(true);
       } else if (status === 'complete') {
         showLaunchStatus(data.proof_complete === true ? 'Proof complete · ready for next task' :
-          'Task finished · inspect the trajectory');
+          data.case === 'safe_demo' && data.task_completed === true ?
+          'Task complete · report below' : 'Task finished · inspect the trajectory');
       } else if (status === 'failed' || status === 'interrupted') {
-        showLaunchStatus('Run ended without complete proof · ready to retry', 'error');
+        showLaunchStatus(data.case === 'safe_demo' ? 'Task did not complete · ready to retry' :
+          'Run ended without complete proof · ready to retry', 'error');
       } else {
         showLaunchStatus('Control plane ready');
       }
