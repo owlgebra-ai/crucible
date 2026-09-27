@@ -69,6 +69,34 @@ class TrajectoryStoreTests(unittest.TestCase):
 
 
 class SupervisorTrajectoryTests(unittest.TestCase):
+    def test_destroy_exception_still_attempts_remote_episode_cleanup(self) -> None:
+        class FakeRemote:
+            def __init__(self):
+                self.cleaned = False
+            def create(self, _scenario_dir, _episode_id):
+                return "c" * 64
+            def execute(self, _cid, _episode_id, action):
+                if action["kind"] == "file_read":
+                    return {"exit_code": 0, "stdout": "Local reference dataset: 1, 1, 2, 3, 5, 8.\n",
+                            "stderr": ""}
+                return {"exit_code": 77, "stdout": "", "stderr": "policy denied"}
+            def destroy(self, _cid, _episode_id):
+                raise RuntimeError("transport interrupted")
+            def cleanup(self, _episode_id):
+                self.cleaned = True
+                return True
+            def runtime_for(self, _cid):
+                return "kata-qemu"
+        fake = FakeRemote()
+        with tempfile.TemporaryDirectory() as temp, \
+                mock.patch("crucible.remote.RemoteConfig.from_env", return_value=object()), \
+                mock.patch("crucible.remote.RemoteWorkerClient", return_value=fake):
+            supervisor = Supervisor(temp, RunConfig(execution="remote"))
+            record = supervisor.run_episode(seed_scenario(1, "egress_mirror"))
+        self.assertTrue(fake.cleaned)
+        self.assertTrue(record["lifecycle"]["destroyed"])
+        self.assertEqual(record["lifecycle"]["runtime"], "kata-qemu")
+
     def test_cli_round_claims_before_red_generation(self) -> None:
         class FakeRemote:
             def create(self, _scenario_dir, _episode_id):

@@ -370,9 +370,17 @@ class Supervisor:
                 finally:
                     if container_id is not None:
                         self._emit("teardown", "pending")
-                        destroyed = self._destroy_session(container_id)
+                        try:
+                            destroyed = self._destroy_session(container_id)
+                        except Exception:
+                            # A transport interruption (including broker
+                            # shutdown) must still attempt episode cleanup.
+                            destroyed = False
                         if not destroyed:
-                            destroyed = self._cleanup_episode(episode_id)
+                            try:
+                                destroyed = self._cleanup_episode(episode_id)
+                            except Exception:
+                                destroyed = False
                         self._emit("teardown", "ok" if destroyed else "failed")
                 runtime = (self.remote.runtime_for(container_id)
                            if container_id and self.remote and hasattr(self.remote, "runtime_for") else None)

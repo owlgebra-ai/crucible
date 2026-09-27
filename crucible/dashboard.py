@@ -1,18 +1,22 @@
-"""Read-only local dashboard for sanitized CRUCIBLE episode evidence.
+"""Keyless loopback dashboard for launching and observing remote VM tasks.
 
 Run with ``python -m crucible.dashboard --db data/experience.db``. The server
-never writes episodes or accepts mutations; it reads the ExperienceBank API.
-Bind to loopback by default. Put authentication/TLS in front of it before
-exposing it beyond a trusted host.
+reads sanitized evidence and forwards only fixed-case launches to a separate
+credential-owning Unix-socket broker. Bind to loopback and reach it over an
+authenticated SSH tunnel; do not publish its HTTP port.
 """
 
 from __future__ import annotations
 
 import argparse
+import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import ipaddress
 import json
 from pathlib import Path
+import re
 import secrets
+import socket
 import threading
 import time
 from urllib.parse import parse_qs, urlsplit
@@ -21,6 +25,14 @@ from crucible.experience import ExperienceBank
 from crucible.plugins.d6_output_filter import OutputFilterPlugin
 from crucible.scenarios import CANARY
 from crucible.trajectory import TrajectoryStore
+
+
+DEFAULT_TASK_SOCKET = Path("/run/crucible-task/task.sock")
+_LOOPBACK_HOST = re.compile(r"(?:localhost|127\.0\.0\.1|\[::1\])(?::([1-9][0-9]{0,4}))?\Z", re.I)
+_JOB_ID = re.compile(r"job_[a-f0-9]{16}\Z")
+_TASK_ID = re.compile(r"task_[a-f0-9]{16}\Z")
+_TASK_CASES = frozenset({"safe_demo", "readiness_evolution"})
+_TASK_STATUSES = frozenset({"idle", "queued", "running", "complete", "failed", "interrupted"})
 
 
 HTML = r"""<!doctype html>
@@ -853,18 +865,90 @@ def build_snapshot(db_path: str | Path, *, limit: int = 200) -> dict:
             "latest_report": latest_report}
 
 
-def make_handler(db_path: Path, limit: int) -> type[BaseHTTPRequestHandler]:
+def _broker_call(socket_path: Path, request: dict) -> dict:
+    payload = json.dumps(request, ensure_ascii=True, separators=(",", ":")).encode("ascii") + b"\n"
+    if len(payload) > 256:
+        raise ValueError("broker request too large")
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+        connection.settimeout(3)
+        connection.connect(str(socket_path))
+        connection.sendall(payload)
+        with connection.makefile("rb") as response:
+            raw = response.readline(1025)
+    if not raw or len(raw) > 1024 or not raw.endswith(b"\n"):
+        raise ValueError("invalid broker response")
+    result = json.loads(raw)
+    if not isinstance(result, dict) or result.get("ok") not in {True, False}:
+        raise ValueError("invalid broker response")
+    return result
+
+
+def _public_task(value: object) -> dict:
+    """Forward only the broker's closed, non-sensitive status fields."""
+    if not isinstance(value, dict):
+        raise ValueError("invalid broker task")
+    job_id, task_id = value.get("job_id"), value.get("task_id")
+    case, status, proof = value.get("case"), value.get("status"), value.get("proof_complete")
+    completed = value.get("task_completed")
+    if (job_id is not None and (not isinstance(job_id, str) or not _JOB_ID.fullmatch(job_id))
+            or task_id is not None and (not isinstance(task_id, str) or not _TASK_ID.fullmatch(task_id))
+            or case is not None and case not in _TASK_CASES
+            or status not in _TASK_STATUSES
+            or proof is not None and type(proof) is not bool
+            or completed is not None and type(completed) is not bool):
+        raise ValueError("invalid broker task")
+    public = {"job_id": job_id, "task_id": task_id, "case": case,
+              "status": status, "proof_complete": proof, "task_completed": completed}
+    for key in ("started_at", "finished_at"):
+        stamp = value.get(key)
+        if stamp is not None and (not isinstance(stamp, str) or len(stamp) > 40 or
+                                  not re.fullmatch(r"[0-9T:+.Z-]+", stamp)):
+            raise ValueError("invalid broker timestamp")
+        public[key] = stamp
+    return public
+
+
+def make_handler(db_path: Path, limit: int, *, task_socket: Path = DEFAULT_TASK_SOCKET) -> type[BaseHTTPRequestHandler]:
     stream_slots = threading.BoundedSemaphore(8)
+    csrf_token = secrets.token_urlsafe(32)
 
     class Handler(BaseHTTPRequestHandler):
+        def _loopback_host(self) -> str | None:
+            hosts = self.headers.get_all("Host", [])
+            if len(hosts) != 1:
+                return None
+            host = hosts[0]
+            match = _LOOPBACK_HOST.fullmatch(host)
+            if not match or (match.group(1) and int(match.group(1)) > 65535):
+                return None
+            try:
+                if not ipaddress.ip_address(self.client_address[0]).is_loopback:
+                    return None
+            except (ValueError, IndexError, TypeError):
+                return None
+            return host
+
         def do_GET(self) -> None:
+            if self._loopback_host() is None:
+                self._reply(403, "text/plain; charset=utf-8", b"forbidden\n")
+                return
             parsed = urlsplit(self.path)
             route = parsed.path
             if route == "/":
                 nonce = secrets.token_urlsafe(16)
-                body = HTML.replace("__NONCE__", nonce).encode("utf-8")
+                body = HTML.replace("__NONCE__", nonce).replace("__TASK_CSRF__", csrf_token).encode("utf-8")
                 self._reply(200, "text/html; charset=utf-8", body,
                             csp=f"default-src 'none'; script-src 'nonce-{nonce}'; style-src 'nonce-{nonce}'; connect-src 'self'; base-uri 'none'; form-action 'none'")
+            elif route == "/api/tasks/current":
+                try:
+                    result = _broker_call(task_socket, {"op": "current"})
+                    if result.get("ok") is not True:
+                        raise ValueError("broker status unavailable")
+                    body = json.dumps(_public_task(result.get("task")), ensure_ascii=True).encode("ascii")
+                except (OSError, ValueError, TypeError):
+                    self._reply(503, "application/json", b'{"error":"task launcher unavailable"}')
+                    return
+                self._reply(200, "application/json", body)
             elif route == "/api/snapshot":
                 try:
                     body = json.dumps(build_snapshot(db_path, limit=limit), ensure_ascii=True).encode("utf-8")
@@ -892,6 +976,62 @@ def make_handler(db_path: Path, limit: int) -> type[BaseHTTPRequestHandler]:
                 self._reply(200, "text/plain; charset=utf-8", b"ok\n")
             else:
                 self._reply(404, "text/plain; charset=utf-8", b"not found\n")
+
+        def do_POST(self) -> None:
+            host = self._loopback_host()
+            origins = self.headers.get_all("Origin", [])
+            csrf_headers = self.headers.get_all("X-Crucible-CSRF", [])
+            if host is None or len(origins) != 1 or origins[0] != "http://" + host:
+                self._reply(403, "application/json", b'{"error":"forbidden"}')
+                return
+            if (len(csrf_headers) != 1 or len(csrf_headers[0]) != len(csrf_token)
+                    or not csrf_headers[0].isascii()
+                    or not hmac.compare_digest(csrf_headers[0], csrf_token)):
+                self._reply(403, "application/json", b'{"error":"forbidden"}')
+                return
+            parsed = urlsplit(self.path)
+            if parsed.path != "/api/tasks" or parsed.query or parsed.fragment:
+                self._reply(404, "application/json", b'{"error":"not found"}')
+                return
+            if self.headers.get("Content-Type") != "application/json":
+                self._reply(415, "application/json", b'{"error":"JSON required"}')
+                return
+            lengths = self.headers.get_all("Content-Length", [])
+            if (len(lengths) != 1 or len(lengths[0]) > 3 or
+                    not lengths[0].isascii() or not lengths[0].isdecimal()):
+                self._reply(400, "application/json", b'{"error":"invalid request"}')
+                return
+            length = int(lengths[0])
+            if not 1 <= length <= 128 or self.headers.get("Transfer-Encoding"):
+                self._reply(400, "application/json", b'{"error":"invalid request"}')
+                return
+            def unique_object(pairs: list[tuple[str, object]]) -> dict:
+                result: dict = {}
+                for key, value in pairs:
+                    if key in result:
+                        raise ValueError("duplicate key")
+                    result[key] = value
+                return result
+            try:
+                self.connection.settimeout(3)
+                request = json.loads(self.rfile.read(length), object_pairs_hook=unique_object)
+                if (not isinstance(request, dict) or set(request) != {"case"}
+                        or not isinstance(request["case"], str) or request["case"] not in _TASK_CASES):
+                    raise ValueError("invalid task case")
+            except (ValueError, UnicodeError, TimeoutError, OSError):
+                self._reply(400, "application/json", b'{"error":"invalid request"}')
+                return
+            try:
+                result = _broker_call(task_socket, {"op": "start", "case": request["case"]})
+                if result.get("ok") is True:
+                    body = json.dumps(_public_task(result.get("task")), ensure_ascii=True).encode("ascii")
+                    self._reply(202, "application/json", body)
+                elif result.get("error") == "busy":
+                    self._reply(409, "application/json", b'{"error":"task already active"}')
+                else:
+                    self._reply(503, "application/json", b'{"error":"task launcher unavailable"}')
+            except (OSError, ValueError, TypeError):
+                self._reply(503, "application/json", b'{"error":"task launcher unavailable"}')
 
         def _trajectory_stream(self, query: str) -> None:
             def sequence(value: str) -> int:
@@ -940,6 +1080,8 @@ def make_handler(db_path: Path, limit: int) -> type[BaseHTTPRequestHandler]:
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header("Cross-Origin-Resource-Policy", "same-origin")
             if csp:
                 self.send_header("Content-Security-Policy", csp)
             self.end_headers()
@@ -953,15 +1095,20 @@ def make_handler(db_path: Path, limit: int) -> type[BaseHTTPRequestHandler]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Read-only CRUCIBLE evidence dashboard")
+    parser = argparse.ArgumentParser(description="Keyless CRUCIBLE task dashboard")
     parser.add_argument("--db", default="data/experience.sqlite", help="ExperienceBank SQLite path")
     parser.add_argument("--host", default="127.0.0.1", help="bind address (default: loopback)")
     parser.add_argument("--port", type=int, default=8787, help="TCP port (default: 8787)")
     parser.add_argument("--limit", type=int, default=200, help="maximum episodes shown (1–1000)")
+    parser.add_argument("--task-socket", type=Path, default=DEFAULT_TASK_SOCKET,
+                        help="private fixed-case task broker socket")
     args = parser.parse_args(argv)
     if not 1 <= args.limit <= 1000:
         parser.error("--limit must be from 1 to 1000")
-    with ThreadingHTTPServer((args.host, args.port), make_handler(Path(args.db), args.limit)) as server:
+    if args.host not in {"127.0.0.1", "::1", "localhost"}:
+        parser.error("dashboard must bind to loopback")
+    with ThreadingHTTPServer((args.host, args.port),
+                             make_handler(Path(args.db), args.limit, task_socket=args.task_socket)) as server:
         print(f"CRUCIBLE dashboard listening on http://{args.host}:{server.server_port}")
         try:
             server.serve_forever()

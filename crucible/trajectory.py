@@ -157,6 +157,31 @@ class TrajectoryStore:
             self._event(db, task_id, "task_start", "queued")
         return task_id
 
+    def reconcile_interrupted(self) -> bool:
+        """Close an active row whose owning process no longer exists.
+
+        A restarted task broker must never report an abandoned run as live or
+        successful. This operation does not claim a new task slot.
+        """
+        if self.read_only:
+            raise PermissionError("trajectory store is read-only")
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            active = db.execute("SELECT task_id, owner_pid FROM tasks WHERE status IN (?, ?) LIMIT 1",
+                                _ACTIVE).fetchone()
+            if not active:
+                return False
+            try:
+                os.kill(active["owner_pid"], 0)
+            except ProcessLookupError:
+                db.execute("UPDATE tasks SET status='interrupted', finished_at=? WHERE task_id=?",
+                           (self._now(), active["task_id"]))
+                self._event(db, active["task_id"], "task_error", "interrupted")
+                return True
+            except PermissionError:
+                return False
+            return False
+
     def mark_running(self, task_id: str) -> None:
         if self.read_only:
             raise PermissionError("trajectory store is read-only")

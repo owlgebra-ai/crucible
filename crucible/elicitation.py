@@ -13,6 +13,8 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import re
+import signal
 from uuid import uuid4
 
 from crucible.env import load_env_local
@@ -159,6 +161,17 @@ def main(argv: list[str] | None = None) -> int:
     if args.trajectory_db is not None and args.execution != "remote":
         parser.error("--trajectory-db requires --execution remote")
 
+    broker_task_id = os.getenv("CRUCIBLE_BROKER_TASK_ID")
+    if broker_task_id is not None and not re.fullmatch(r"task_[a-f0-9]{16}", broker_task_id):
+        parser.error("invalid broker-owned trajectory task ID")
+    if broker_task_id and args.execution != "remote":
+        parser.error("broker-owned trajectory requires remote execution")
+    if broker_task_id:
+        def terminate(_signal: int, _frame: object) -> None:
+            # Let Supervisor's remote-session finally block run on stop.
+            raise RuntimeError("browser evolution interrupted")
+        signal.signal(signal.SIGTERM, terminate)
+
     load_env_local(REPO_ROOT)
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "_" + uuid4().hex[:8]
     state_root = REPO_ROOT / "data" / ("elicitation_" + run_id)
@@ -176,8 +189,11 @@ def main(argv: list[str] | None = None) -> int:
         ):
             parser.error("--trajectory-db must name an existing absolute regular file, not a symlink")
         trajectory_store = TrajectoryStore(trajectory_db)
+    supervisor_options = {"trajectory_store": trajectory_store}
+    if broker_task_id:
+        supervisor_options["task_id"] = broker_task_id
     supervisor = Supervisor(supervisor_root, RunConfig(mode="vultr", execution=args.execution),
-                            trajectory_store=trajectory_store)
+                            **supervisor_options)
     if any(plugin.startswith("pl_resource_exhaustion_") for plugin in supervisor.registry.mounted):
         parser.error("resource-exhaustion rule already mounted; use a fresh deployment for a before/after run")
     summary: dict = {
