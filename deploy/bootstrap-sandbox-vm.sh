@@ -14,7 +14,7 @@ RELEASE="$3"
 # shellcheck disable=SC1091
 source /etc/os-release
 [[ "${ID:-}" == ubuntu || "${ID:-}" == debian ]] || exit 77
-for file in infra/setup-net.sh infra/build-worker.sh infra/prove-wall.sh deploy/remote-worker-gateway.py; do
+for file in infra/setup-net.sh infra/build-worker.sh infra/prove-wall.sh deploy/remote-worker-gateway.py deploy/check-sandbox-idle.py; do
   [[ -f "$RELEASE/$file" ]] || { echo "missing $file" >&2; exit 2; }
 done
 PACKAGES=()
@@ -34,6 +34,41 @@ if sys.version_info < (3, 10):
 PY
 systemctl enable --now docker
 docker info >/dev/null
+command -v flock >/dev/null || { echo "flock is required for sandbox deployment" >&2; exit 77; }
+# The forced gateway uses this same lock for create/destroy. Hold it through
+# the wall proof and release switch so a new browser/CLI episode cannot start
+# after the idle check but before the sandbox policy is activated.
+python3 - <<'PY'
+import os
+import stat
+
+parent = "/var/lock"
+directory = os.stat(parent)
+if (not stat.S_ISDIR(directory.st_mode) or directory.st_uid != 0 or
+        ((directory.st_mode & 0o022) and not (directory.st_mode & stat.S_ISVTX))):
+    raise SystemExit("unsafe gateway lock directory")
+path = parent + "/crucible-remote-gateway.lock"
+fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+try:
+    info = os.fstat(fd)
+    if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or
+            info.st_nlink != 1 or info.st_mode & 0o022):
+        raise SystemExit("unsafe gateway lock")
+    os.fchmod(fd, 0o600)
+finally:
+    os.close(fd)
+PY
+exec 8<>/var/lock/crucible-remote-gateway.lock
+python3 - <<'PY'
+import os
+import stat
+info = os.fstat(8)
+if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or
+        info.st_nlink != 1 or stat.S_IMODE(info.st_mode) != 0o600):
+    raise SystemExit("gateway lock changed before flock")
+PY
+flock -n 8 || { echo "sandbox gateway is busy" >&2; exit 75; }
+python3 "$RELEASE/deploy/check-sandbox-idle.py"
 iptables -w -S DOCKER-USER >/dev/null 2>&1 || {
   echo "Docker iptables DOCKER-USER chain is required" >&2; exit 77;
 }

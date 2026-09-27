@@ -367,7 +367,7 @@ HTML = r"""<!doctype html>
       </div>
       <div class="launch-actions"><button id="launch-task" class="launch-button" type="button" data-csrf="__TASK_CSRF__" disabled>Launch remote task ↗</button>
         <span id="launch-status" class="launch-status" role="status" aria-live="polite">Checking control plane…</span></div>
-      <p class="launch-note">Only these server-owned cases can be launched here. The live pane shows bounded, sanitized events; credentials and raw tool arguments stay on VM1.</p>
+      <p class="launch-note">Only these server-owned cases can be launched here. The live pane shows bounded action names and statuses. The evidence table shows scanned action details; model and SSH credentials stay on VM1.</p>
     </div>
     <div class="launch-architecture" aria-label="Live task path">
       <p class="architecture-label">Live architecture / two Vultr instances</p>

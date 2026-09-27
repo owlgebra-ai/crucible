@@ -25,6 +25,7 @@ REQUIRED = {
     "infra/run-worker.sh",
     "infra/setup-net.sh",
     "deploy/bootstrap-vm.sh",
+    "deploy/check-sandbox-idle.py",
 }
 INFRA_NAMES = {
     "Dockerfile",
@@ -69,6 +70,7 @@ def allowed(name: str) -> bool:
         }
     return name in {"deploy/bootstrap-vm.sh", "deploy/bootstrap-control-vm.sh",
                     "deploy/bootstrap-sandbox-vm.sh", "deploy/activate-worker-runtime.sh",
+                    "deploy/check-sandbox-idle.py",
                     "deploy/remote-worker-gateway.py", "deploy/authorize-control-key.sh"}
 
 
