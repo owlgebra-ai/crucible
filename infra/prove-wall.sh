@@ -215,10 +215,11 @@ fi
 echo "No container remains for $PROBE_ID"
 if [[ "$WALL_RUNTIME" == kata-qemu ]]; then
   for attempt in {1..10}; do
-    if python3 "$INFRA_DIR/verify-kata.py" --destroyed "$DESTROYED_CID"; then
+    if TEARDOWN_RESULT="$(python3 "$INFRA_DIR/verify-kata.py" --destroyed "$DESTROYED_CID" 2>&1)"; then
       break
     fi
     if ((attempt == 10)); then
+      echo "$TEARDOWN_RESULT" >&2
       echo "FAILED: task microVM survived teardown" >&2
       exit 1
     fi
