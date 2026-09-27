@@ -26,6 +26,23 @@ import sys
 if sys.version_info < (3, 10):
     raise SystemExit("Python 3.10 or newer required")
 PY
+# The browser broker takes a shared flock on this inode before reserving a
+# task; deploy/ssh-deploy.sh takes the exclusive lock. A direct bootstrap must
+# provide the same root-owned inode without following a link or truncating it.
+python3 - <<'PY'
+import os
+import stat
+
+path = "/var/lock/crucible-deploy.lock"
+fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+try:
+    info = os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+        raise SystemExit("unsafe control deployment lock")
+    os.fchmod(fd, 0o600)
+finally:
+    os.close(fd)
+PY
 if ! getent group crucible >/dev/null 2>&1; then groupadd --system crucible; fi
 if ! id crucible >/dev/null 2>&1; then
   useradd --system --gid crucible --home-dir /var/lib/crucible --shell /usr/sbin/nologin crucible
