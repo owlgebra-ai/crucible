@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 import re
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -36,7 +37,28 @@ CID = re.compile(r"[a-f0-9]{64}\Z")
 EPISODE = re.compile(r"ep_[a-f0-9]{12}\Z")
 SCANNER = OutputFilterPlugin((CANARY,))
 RUN_ENV = {"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "HOME": "/root"}
+RUNTIME_CONFIG = Path("/etc/crucible/worker-runtime")
+ALLOWED_RUNTIMES = frozenset({"runc", "runsc-oci", "kata-qemu"})
 MAX_SESSIONS = 4
+
+
+def _configured_runtime() -> str:
+    """Use only the root-owned VM2 runtime choice, never an SSH environment value."""
+    try:
+        descriptor = os.open(RUNTIME_CONFIG, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            metadata = os.fstat(descriptor)
+            if (not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != 0
+                    or metadata.st_mode & 0o077 or metadata.st_size > 32):
+                raise ValueError("invalid worker runtime configuration")
+            value = os.read(descriptor, 33).decode("ascii")
+        finally:
+            os.close(descriptor)
+    except (OSError, UnicodeError):
+        raise ValueError("worker runtime configuration unavailable") from None
+    if value not in {runtime + "\n" for runtime in ALLOWED_RUNTIMES}:
+        raise ValueError("invalid worker runtime configuration")
+    return value[:-1]
 
 
 def _run(args: list[str], *, input_text: str | None = None, timeout: int = 30,
@@ -92,13 +114,18 @@ def _ensure_capacity(episode_id: str) -> None:
         raise ValueError("episode label is already in use")
 
 
-def _session_matches(cid: str, episode_id: str) -> bool:
+def _session_matches(cid: str, episode_id: str, expected_runtime: str | None = None) -> bool:
     if not CID.fullmatch(cid) or not EPISODE.fullmatch(episode_id):
         return False
     check = _run(["docker", "inspect", "--format",
-                  '{{ index .Config.Labels "crucible.episode" }}|{{ index .Config.Labels "crucible.managed" }}', cid],
+                  '{{ index .Config.Labels "crucible.episode" }}|{{ index .Config.Labels "crucible.managed" }}|{{ .HostConfig.Runtime }}', cid],
                  timeout=15)
-    return check.returncode == 0 and check.stdout.strip() == f"{episode_id}|true"
+    if check.returncode != 0:
+        return False
+    fields = check.stdout.strip().split("|")
+    return (len(fields) == 3 and fields[:2] == [episode_id, "true"]
+            and fields[2] in ALLOWED_RUNTIMES
+            and (expected_runtime is None or fields[2] == expected_runtime))
 
 
 def _scan_result(raw: dict[str, Any]) -> dict[str, Any]:
@@ -152,6 +179,7 @@ def handle(request: dict[str, Any]) -> dict[str, Any]:
         if set(request) != {"op", "episode_id", "files"} or not isinstance(request["files"], dict):
             raise ValueError("invalid create request")
         files = request["files"]
+        runtime = _configured_runtime()
         if not {"scenario.json", "README.md", "reference.txt"}.issubset(files) or not set(files).issubset(FILES):
             raise ValueError("invalid scenario files")
         with _create_lock():
@@ -170,9 +198,11 @@ def handle(request: dict[str, Any]) -> dict[str, Any]:
                     (directory / filename).write_bytes(content)
                 try:
                     created = _run([str(ROOT / "infra" / "create-worker.sh"), str(directory)],
-                                   timeout=140, env={**RUN_ENV, "CRUCIBLE_EPISODE_ID": episode_id})
+                                   timeout=140, env={**RUN_ENV, "CRUCIBLE_EPISODE_ID": episode_id,
+                                                     "CRUCIBLE_RUNTIME": runtime})
                     cid = created.stdout.strip().splitlines()[-1] if created.stdout.strip() else ""
-                    if created.returncode != 0 or not CID.fullmatch(cid) or not _session_matches(cid, episode_id):
+                    if (created.returncode != 0 or not CID.fullmatch(cid)
+                            or not _session_matches(cid, episode_id, runtime)):
                         raise ValueError("worker session creation failed")
                     return {"ok": True, "container_id": cid}
                 except Exception:
@@ -194,7 +224,7 @@ def handle(request: dict[str, Any]) -> dict[str, Any]:
     if op == "exec":
         if set(request) != {"op", "episode_id", "container_id", "action"}:
             raise ValueError("invalid exec request")
-        if not _session_matches(cid, episode_id):
+        if not _session_matches(cid, episode_id, _configured_runtime()):
             raise ValueError("worker session does not match episode")
         action, denial = _check_action(request["action"])
         if denial:

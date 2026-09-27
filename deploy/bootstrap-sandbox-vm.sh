@@ -38,11 +38,27 @@ iptables -w -S DOCKER-USER >/dev/null 2>&1 || {
   echo "Docker iptables DOCKER-USER chain is required" >&2; exit 77;
 }
 
+# The forced gateway accepts a runtime choice only from this root-owned local
+# file. Missing or malformed configuration must not silently select runc.
+install -d -m 0700 /etc/crucible
+RUNTIME_CONFIG=/etc/crucible/worker-runtime
+if [[ ! -e "$RUNTIME_CONFIG" && ! -L "$RUNTIME_CONFIG" ]]; then
+  install -m 0600 /dev/null "$RUNTIME_CONFIG"
+  printf 'runc\n' > "$RUNTIME_CONFIG"
+fi
+RUNTIME="$(python3 - "$RELEASE" <<'PY'
+import runpy
+import sys
+gateway = runpy.run_path(sys.argv[1] + "/deploy/remote-worker-gateway.py")
+print(gateway["_configured_runtime"]())
+PY
+)"
+
 # VM2 receives no inference.env and has no bank/dashboard service. The proof
 # must pass before this release becomes the forced SSH command target.
 bash "$RELEASE/infra/setup-net.sh"
 bash "$RELEASE/infra/build-worker.sh"
-bash "$RELEASE/infra/prove-wall.sh"
+CRUCIBLE_RUNTIME="$RUNTIME" bash "$RELEASE/infra/prove-wall.sh"
 
 install -d -m 0755 /opt/crucible
 [[ ! -e /opt/crucible/current.next && ! -L /opt/crucible/current.next ]] || {

@@ -5,7 +5,9 @@ from __future__ import annotations
 from contextlib import nullcontext
 import importlib.util
 import json
+import os
 from pathlib import Path
+from types import SimpleNamespace
 import subprocess
 import tempfile
 import unittest
@@ -24,6 +26,60 @@ spec.loader.exec_module(gateway)
 
 
 class GatewayTests(unittest.TestCase):
+    def test_runtime_is_selected_only_from_owner_only_vm_config(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "runtime"
+            path.write_text("kata-qemu\n")
+            path.chmod(0o600)
+            real_fstat = os.fstat
+
+            def root_owned(descriptor):
+                details = real_fstat(descriptor)
+                return SimpleNamespace(st_mode=details.st_mode, st_uid=0,
+                                       st_size=details.st_size)
+
+            with mock.patch.object(gateway, "RUNTIME_CONFIG", path), \
+                    mock.patch.object(gateway.os, "fstat", side_effect=root_owned):
+                self.assertEqual(gateway._configured_runtime(), "kata-qemu")
+                path.write_text("kata-qemu\nextra\n")
+                with self.assertRaisesRegex(ValueError, "invalid worker runtime"):
+                    gateway._configured_runtime()
+                path.write_text("runc\n")
+                path.chmod(0o644)
+                with self.assertRaisesRegex(ValueError, "invalid worker runtime"):
+                    gateway._configured_runtime()
+            path.unlink()
+            path.symlink_to(Path(temp) / "target")
+            with mock.patch.object(gateway, "RUNTIME_CONFIG", path):
+                with self.assertRaisesRegex(ValueError, "runtime configuration unavailable"):
+                    gateway._configured_runtime()
+
+    def test_create_passes_only_configured_runtime_and_checks_effective_runtime(self) -> None:
+        files = {name: "eA==" for name in ("scenario.json", "README.md", "reference.txt")}
+        cid = "b" * 64
+        with mock.patch.object(gateway, "_configured_runtime", return_value="kata-qemu"), \
+                mock.patch.object(gateway, "_create_lock", return_value=nullcontext()), \
+                mock.patch.object(gateway, "_ensure_capacity"), \
+                mock.patch.object(gateway, "_run", return_value=subprocess.CompletedProcess([], 0, cid + "\n", "")) as run, \
+                mock.patch.object(gateway, "_session_matches", return_value=True) as matches:
+            response = gateway.handle({"op": "create", "episode_id": "ep_" + "a" * 12,
+                                       "files": files})
+        self.assertEqual(response["container_id"], cid)
+        self.assertEqual(run.call_args.kwargs["env"]["CRUCIBLE_RUNTIME"], "kata-qemu")
+        matches.assert_called_once_with(cid, "ep_" + "a" * 12, "kata-qemu")
+
+    def test_exec_rejects_session_on_wrong_runtime_before_runner(self) -> None:
+        request = {"op": "exec", "episode_id": "ep_" + "a" * 12,
+                   "container_id": "b" * 64,
+                   "action": {"kind": "file_read", "payload": {"path": "/work/scenario/reference.txt"}}}
+        with mock.patch.object(gateway, "_configured_runtime", return_value="kata-qemu"), \
+                mock.patch.object(gateway, "_session_matches", return_value=False) as matches, \
+                mock.patch.object(gateway, "_run") as run:
+            with self.assertRaisesRegex(ValueError, "does not match"):
+                gateway.handle(request)
+        matches.assert_called_once_with("b" * 64, "ep_" + "a" * 12, "kata-qemu")
+        run.assert_not_called()
+
     def test_output_scanned_before_ssh_response_and_worker_count_preserved(self) -> None:
         result = gateway._scan_result({"exit_code": 0, "stdout": "license=" + CANARY,
                                        "stderr": "", "redactions": 2})
@@ -46,7 +102,8 @@ class GatewayTests(unittest.TestCase):
 
     def test_capacity_is_checked_before_container_creation(self) -> None:
         files = {name: "eA==" for name in ("scenario.json", "README.md", "reference.txt")}
-        with mock.patch.object(gateway, "_create_lock", return_value=nullcontext()), \
+        with mock.patch.object(gateway, "_configured_runtime", return_value="runc"), \
+                mock.patch.object(gateway, "_create_lock", return_value=nullcontext()), \
                 mock.patch.object(gateway, "_ensure_capacity", side_effect=ValueError("at capacity")), \
                 mock.patch.object(gateway, "_run") as run:
             with self.assertRaisesRegex(ValueError, "capacity"):
@@ -66,7 +123,8 @@ class GatewayTests(unittest.TestCase):
         action = {"kind": "shell", "payload": {"cmd": " ".join(("rm", "-rf", "/"))}}
         request = {"op": "exec", "episode_id": "ep_" + "a" * 12,
                    "container_id": "b" * 64, "action": action}
-        with mock.patch.object(gateway, "_session_matches", return_value=True), \
+        with mock.patch.object(gateway, "_configured_runtime", return_value="runc"), \
+                mock.patch.object(gateway, "_session_matches", return_value=True), \
                 mock.patch.object(gateway, "_run") as runner:
             result = gateway.handle(request)["result"]
         self.assertEqual((result["exit_code"], result["policy_denial"]), (77, "D3"))
