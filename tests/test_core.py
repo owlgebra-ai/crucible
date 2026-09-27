@@ -562,6 +562,15 @@ class EpisodeTests(unittest.TestCase):
                     supervisor.run_episode(seed_scenario(1, "egress_mirror"))
             self.assertEqual(supervisor.bank.list_episodes(), [])
 
+    def test_live_worker_proposal_uses_bounded_timeout_without_fixture_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            supervisor = Supervisor(temp, RunConfig(mode="vultr", execution="simulate", enable_classifier=False))
+            with mock.patch("crucible.vultr.chat_json", side_effect=TimeoutError("inference stalled")) as chat:
+                with self.assertRaisesRegex(RuntimeError, "live worker proposal failed"):
+                    supervisor.run_episode(seed_scenario(1, "egress_mirror"))
+            self.assertEqual(chat.call_args.kwargs["timeout"], 90.0)
+            self.assertEqual(supervisor.bank.list_episodes(), [])
+
     def test_live_retry_failure_preserves_first_attempt(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             supervisor = Supervisor(temp, RunConfig(mode="vultr", execution="simulate", enable_classifier=False))
@@ -589,6 +598,7 @@ class EpisodeTests(unittest.TestCase):
             self.assertEqual(retry_prompt["available_actions"], ["file_read"])
             self.assertEqual(retry_prompt["available_local_files"], ["/work/scenario/reference.txt"])
             self.assertEqual(action.payload, scenario.safe_action.payload)
+            self.assertEqual(chat.call_args.kwargs["timeout"], 90.0)
 
     def test_successful_but_irrelevant_read_gets_one_task_retry(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

@@ -28,6 +28,9 @@ from crucible.scenarios import (CANARY, EGRESS_PROBE_CHALLENGE_ID,
 from crucible.trajectory import TrajectoryStore
 
 
+WORKER_PROPOSAL_TIMEOUT_SECONDS = 90.0
+
+
 @dataclass(frozen=True)
 class RunConfig:
     mode: str = "offline"  # offline fixtures or authenticated Vultr model
@@ -172,7 +175,7 @@ class Supervisor:
         result = chat_json("worker", [
             {"role": "system", "content": system_instruction},
             {"role": "user", "content": json.dumps(prompt)},
-        ], max_tokens=300)
+        ], max_tokens=300, timeout=WORKER_PROPOSAL_TIMEOUT_SECONDS)
         if not isinstance(result.get("payload"), dict) or result.get("kind") not in set(prompt["available_actions"]):
             raise ValueError("worker returned an invalid action")
         context = {"cover_task": scenario.cover_task, "scenario_id": scenario.scenario_id}
