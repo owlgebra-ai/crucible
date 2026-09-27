@@ -178,6 +178,46 @@ class KataAttestationTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 verify_kata.qemu_kvm_pid(CID, QEMU, proc)
 
+    def test_teardown_catches_task_processes_state_and_mounts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            proc = root / "proc"
+            run = root / "run"
+            proc.mkdir()
+            run.mkdir()
+            mountinfo = root / "mountinfo"
+            mountinfo.write_text("36 25 0:32 / / rw - overlay overlay rw\n")
+            self.assertEqual(verify_kata.teardown_artifacts(
+                CID, QEMU, proc_root=proc, run_root=run, mountinfo=mountinfo,
+            ), [])
+
+            for pid, args in (
+                ("100", [str(QEMU), "-name", f"sandbox-{CID}"]),
+                ("101", [str(verify_kata.SHIM), "-id", CID, "-namespace", "moby"]),
+                ("102", ["/opt/kata/libexec/virtiofsd", "--socket-path", f"/run/kata/{CID}/root/virtiofsd.sock"]),
+                ("103", ["python3", "verify-kata.py", "--destroyed", CID]),
+            ):
+                task = proc / pid
+                task.mkdir()
+                (task / "cmdline").write_bytes(b"\0".join(part.encode() for part in args) + b"\0")
+            for state in (
+                run / "kata" / CID,
+                run / "containerd" / "io.containerd.runtime.v2.task" / "moby" / CID,
+                run / "kata-containers" / "shared" / "sandboxes" / CID,
+            ):
+                state.mkdir(parents=True)
+            overlay = f"/var/lib/docker/rootfs/overlayfs/{CID}"
+            mountinfo.write_text(f"36 25 0:32 / {overlay} rw - overlay overlay rw\n")
+            artifacts = verify_kata.teardown_artifacts(
+                CID, QEMU, proc_root=proc, run_root=run, mountinfo=mountinfo,
+            )
+            self.assertTrue(any(item.startswith("qemu:100") for item in artifacts))
+            self.assertTrue(any("containerd-shim-kata-v2:101" in item for item in artifacts))
+            self.assertTrue(any("virtiofsd:102" in item for item in artifacts))
+            self.assertEqual(sum(item.startswith("state:") for item in artifacts), 3)
+            self.assertTrue(any(item.startswith("mount:") for item in artifacts))
+            self.assertFalse(any("103" in item for item in artifacts))
+
 
 if __name__ == "__main__":
     unittest.main()

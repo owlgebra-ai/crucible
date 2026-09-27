@@ -233,6 +233,44 @@ def qemu_kvm_pid(cid: str, qemu_binary: Path, proc_root: Path = Path("/proc")) -
     return matches[0]
 
 
+def teardown_artifacts(
+    cid: str, qemu_binary: Path, *, proc_root: Path = Path("/proc"),
+    run_root: Path = Path("/run"), mountinfo: Path = Path("/proc/self/mountinfo"),
+) -> list[str]:
+    """Find only this task's VMM, shim, shared-fs, state, and mount artifacts."""
+    artifacts = [f"qemu:{pid}" for pid, _ in qemu_processes(cid, qemu_binary, proc_root)]
+    # Match the pinned task ID in command arguments only for Kata component
+    # executables. The verifier's own `--destroyed <cid>` argv is never counted.
+    components = {"containerd-shim-kata-v2", "virtiofsd", qemu_binary.name}
+    for directory in proc_root.iterdir():
+        if not directory.name.isdigit():
+            continue
+        try:
+            args = [arg.decode("utf-8", "replace") for arg in
+                    (directory / "cmdline").read_bytes().rstrip(b"\0").split(b"\0")]
+        except OSError:
+            continue
+        if args and Path(args[0]).name in components and any(cid in arg for arg in args[1:]):
+            marker = f"process:{Path(args[0]).name}:{directory.name}"
+            if marker not in artifacts:
+                artifacts.append(marker)
+    for path in (
+        run_root / "kata" / cid,
+        run_root / "containerd" / "io.containerd.runtime.v2.task" / "moby" / cid,
+        run_root / "kata-containers" / "shared" / "sandboxes" / cid,
+    ):
+        if os.path.lexists(path):
+            artifacts.append(f"state:{path}")
+    for line in mountinfo.read_text().splitlines():
+        fields = line.partition(" - ")[0].split()
+        if len(fields) < 5:
+            raise ValueError("cannot parse host mountinfo during Kata teardown")
+        target = fields[4]
+        if f"/{cid}/" in target + "/":
+            artifacts.append(f"mount:{target}")
+    return artifacts
+
+
 def verify_install() -> tuple[Path, str]:
     if os.environ.get("DOCKER_HOST") not in (None, "", "unix:///var/run/docker.sock"):
         raise ValueError("Docker must use the local rootful socket")
@@ -341,8 +379,9 @@ def main() -> int:
     try:
         if destroyed is not None:
             qemu, _ = verify_install()
-            if qemu_processes(destroyed, qemu):
-                raise ValueError("task QEMU remains after container teardown")
+            artifacts = teardown_artifacts(destroyed, qemu)
+            if artifacts:
+                raise ValueError(f"task microVM artifacts remain: {', '.join(artifacts[:12])}")
             print("kata-qemu microVM teardown: OK")
         elif session is None:
             qemu, _ = verify_install()
