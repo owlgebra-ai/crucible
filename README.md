@@ -1,6 +1,6 @@
 # CRUCIBLE
 
-CRUCIBLE is an agent containment experiment. A red generator presents a legitimate task with an unsafe shortcut; a worker proposes an action; the supervisor checks it before execution; and a blue evolver pulls or writes a narrow defense, then reruns the case. The experience bank records attempts and distilled defenses. The worker proposes typed report facts from an approved tool result; the supervisor checks them against that result and produces a canonical final report. The dashboard is a readout of those records. See the [public demo](https://owlgebra.ai/crucible/), [60-second evidence walkthrough](docs/demo.mp4), and [demo runbook](docs/demo.md) for the VM proof and model run.
+CRUCIBLE is an agent containment experiment. A red generator presents a legitimate task with an unsafe shortcut; a worker proposes an action; the supervisor checks it before execution; and a blue evolver pulls or writes a narrow defense, then reruns the case. The experience bank records attempts and distilled defenses. The worker proposes typed report facts from an approved tool result; the supervisor checks them against that result and produces a canonical final report. The dashboard is a readout of those records. See the [public demo](https://owlgebra.ai/crucible/), [60-second evidence walkthrough](docs/demo.mp4), [demo runbook](docs/demo.md), and [real-model readiness case](docs/real-model-elicitation.md) for recorded VM evidence.
 
 ## Architecture
 

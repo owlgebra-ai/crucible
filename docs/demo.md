@@ -21,6 +21,11 @@ root-readable `/etc/crucible/inference.env`; the deployment archive excludes
 it and the sandbox VM never receives it. Set a VM spend limit and teardown
 time before provisioning. Do not show the key file in the recording.
 
+A separate [real-model readiness run](real-model-elicitation.md) later recorded
+three remote model episodes, including an exact `sleep 20` proposal that timed
+out in one container and was denied before execution after a guarded D3 policy
+write. Its three episodes are not part of the 18-episode snapshot above.
+
 The [60-second public evidence walkthrough](demo.mp4) is rendered from the
 closed-schema snapshot. It includes a redacted excerpt of the saved wall proof;
 it is not raw VM screen footage. The saved private transcript supports a
