@@ -169,6 +169,41 @@ HTML = r"""<!doctype html>
     .empty { color: #9dab9e; padding: 14px 0; }
     .error { color: #ffb9a8; }
     /* PRIVATE_LIVE_START */
+    .launch-panel { display: grid; grid-template-columns: minmax(0, 1.04fr) minmax(340px, .96fr); gap: 1px; border: 1px solid #56745a; background: #56745a; margin: 18px 0 19px; scroll-margin-top: 16px; }
+    .launch-copy { min-width: 0; padding: clamp(23px, 3vw, 42px); background: radial-gradient(circle at 0 100%, #193022 0, #111b17 52%); }
+    .launch-copy .eyebrow { margin-bottom: 15px; }
+    .launch-copy h2 { max-width: 700px; font-size: clamp(1.7rem, 3vw, 2.9rem); font-weight: 530; }
+    .launch-description { max-width: 660px; color: #b9cabe; font-size: .91rem; line-height: 1.7; margin-top: 13px; }
+    .run-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; margin: 24px 0 17px; }
+    .run-option { display: flex; gap: 11px; align-items: flex-start; min-width: 0; padding: 16px 15px; border: 1px solid #405549; background: #0e1713; cursor: pointer; transition: border-color .2s, background .2s; }
+    .run-option:has(input:checked) { border-color: var(--acid); background: #1f3422; }
+    .run-option input { width: 17px; height: 17px; margin: 3px 0 0; flex: 0 0 auto; accent-color: var(--acid); }
+    .run-option strong { display: block; color: #edf4e9; font-size: .88rem; line-height: 1.3; }
+    .run-option small { display: block; color: #9eaea2; font-size: .73rem; line-height: 1.45; margin-top: 6px; }
+    .launch-actions { display: flex; align-items: center; gap: 13px; flex-wrap: wrap; }
+    .launch-button { min-height: 43px; padding: 12px 17px; background: var(--acid); border-color: var(--acid); color: #101711; font-size: .72rem; }
+    .launch-button:hover { background: #e0ffb3; border-color: #e0ffb3; }
+    .launch-button:disabled { opacity: .48; cursor: not-allowed; background: #3f513e; border-color: #4b6848; color: #d5e9d0; }
+    .launch-jump { display: inline-flex; align-items: center; min-height: 33px; padding: 8px 12px; border: 1px solid var(--acid); color: var(--acid); font: 650 .68rem/1.3 var(--mono); letter-spacing: .07em; text-decoration: none; text-transform: uppercase; }
+    .launch-jump:hover { background: var(--acid); color: var(--ink); }
+    .launch-status { display: inline-flex; align-items: center; gap: 8px; color: #b4c8b6; font: 600 .69rem/1.5 var(--mono); }
+    .launch-status::before { content: ''; display: block; width: 7px; height: 7px; border: 1px solid currentColor; border-radius: 50%; }
+    .launch-status.active { color: var(--acid); }
+    .launch-status.active::before { background: var(--acid); box-shadow: 0 0 11px #c8f784a0; }
+    .launch-status.error { color: var(--coral); }
+    .launch-note { color: #859d8b; font: .67rem/1.55 var(--mono); margin-top: 16px; }
+    .launch-architecture { display: flex; flex-direction: column; justify-content: center; gap: 11px; min-width: 0; padding: clamp(23px, 3vw, 38px); background: radial-gradient(circle at 90% 15%, #29452d 0, #101b15 53%); }
+    .architecture-label { color: #8ba792; font: 650 .65rem var(--mono); letter-spacing: .16em; text-transform: uppercase; margin-bottom: 3px; }
+    .architecture-node { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px 10px; min-width: 0; border: 1px solid #49664d; background: #0d1712dc; padding: 13px 15px; }
+    .architecture-node strong { font-size: .9rem; line-height: 1.2; }
+    .architecture-node small { grid-column: 1 / -1; color: #9eb39f; font: .71rem/1.45 var(--mono); }
+    .architecture-node .node-id { color: #93be8f; font: 650 .64rem var(--mono); white-space: nowrap; }
+    .architecture-node.sandbox { border-color: #a2d587; }
+    .architecture-hop { display: flex; align-items: center; gap: 8px; color: #8fad91; font: 600 .67rem/1.3 var(--mono); }
+    .architecture-hop::before { content: ''; display: block; height: 19px; width: 1px; margin-left: 21px; background: #8cb88c; }
+    .architecture-hop span { padding-top: 2px; }
+    .architecture-inference { margin: 2px 0 3px 34px; padding: 10px 12px; border-left: 1px solid #80ad81; background: #17271d; color: #b6cdb8; font: .7rem/1.5 var(--mono); }
+    .architecture-inference strong { color: #f1f6ed; }
     body.trajectory-open { max-width: 1840px; }
     .dashboard-layout.trajectory-open { display: grid; grid-template-columns: minmax(0, 1fr) minmax(330px, 400px); gap: 16px; align-items: start; }
     .dashboard-layout > main { min-width: 0; }
@@ -183,6 +218,7 @@ HTML = r"""<!doctype html>
     .trajectory-summary .subtle { margin-top: 3px; }
     .trajectory-scroll { overflow-y: auto; overscroll-behavior: contain; padding: 8px 18px 24px; flex: 1; }
     .trajectory-list { list-style: none; margin: 0; padding: 0 0 0 13px; border-left: 1px solid #607752; }
+    .trajectory-divider { margin: 18px 0 18px -3px; padding: 7px 10px; color: var(--acid); border-top: 1px solid #5b8255; border-bottom: 1px solid #5b8255; font: 650 .66rem/1.4 var(--mono); text-transform: uppercase; letter-spacing: .06em; }
     .trajectory-event { position: relative; margin: 0 0 15px 14px; padding: 0 0 0 1px; overflow-wrap: anywhere; }
     .trajectory-event::before { content: ''; position: absolute; width: 8px; height: 8px; border-radius: 50%; background: #87a583; left: -19px; top: 7px; }
     .trajectory-event.deny::before, .trajectory-event.error::before { background: var(--coral); }
@@ -197,6 +233,7 @@ HTML = r"""<!doctype html>
       .dashboard-layout.trajectory-open { display: block; }
       .trajectory-pane { position: fixed; z-index: 10; left: 8px; right: 8px; bottom: 8px; top: auto; height: min(70vh, 720px); min-height: 300px; box-shadow: 0 0 0 100vmax #080b0cbb; }
       .trajectory-actions { justify-content: flex-start; }
+      .launch-panel { grid-template-columns: 1fr; }
     }
     /* PRIVATE_LIVE_END */
     @media (min-width: 951px) and (max-width: 1500px) {
@@ -207,6 +244,7 @@ HTML = r"""<!doctype html>
       .dashboard-layout.trajectory-open .hero-visual { display: none; }
       .dashboard-layout.trajectory-open .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .dashboard-layout.trajectory-open .panel-grid { grid-template-columns: 1fr; }
+      .dashboard-layout.trajectory-open .launch-panel { grid-template-columns: 1fr; }
       /* PRIVATE_LIVE_END */
     }
     @media (max-width: 1160px) {
@@ -222,6 +260,7 @@ HTML = r"""<!doctype html>
       .hero-visual .visual-label, .hero-visual .visual-tiny { display: none; }
       .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .panel-grid { grid-template-columns: 1fr; }
+      .launch-panel { grid-template-columns: 1fr; }
     }
     @media (max-width: 680px) {
       body { padding: 0 16px 50px; }
@@ -247,6 +286,7 @@ HTML = r"""<!doctype html>
       .table-wrap { max-height: 460px; }
       .table-hint { display: block; }
       table { min-width: 540px; }
+      .run-options { grid-template-columns: 1fr; }
     }
     @media (max-width: 400px) {
       .stats { grid-template-columns: 1fr; }
@@ -275,6 +315,7 @@ HTML = r"""<!doctype html>
       <p class="subtle">Recorded episodes only. A verdict is not a kernel proof; inspect VM evidence before making a containment claim.</p>
       <div class="hero-utility"><div class="meta"><span id="updated" role="status">Waiting for records</span></div><button id="refresh" type="button">Refresh readout ↻</button>
       <!-- PRIVATE_LIVE_START -->
+      <a class="launch-jump" href="#launch">Launch agent ↗</a>
       <div class="trajectory-actions"><button id="show-trajectory" type="button" aria-controls="trajectory-pane" aria-expanded="false">Show trajectory</button></div>
       <!-- PRIVATE_LIVE_END -->
       </div>
@@ -302,6 +343,31 @@ HTML = r"""<!doctype html>
       <span class="visual-caption">FIG 01 — ILLUSTRATED CONTROL PATH</span>
     </div>
   </header>
+  <!-- PRIVATE_LIVE_START -->
+  <section class="launch-panel" id="launch" aria-labelledby="launch-title">
+    <div class="launch-copy">
+      <p class="eyebrow">01 / Browser control</p>
+      <h2 id="launch-title">Start the host agent from this browser.</h2>
+      <p class="launch-description">The control agent runs on Vultr VM1. This page launches a bounded remote task and follows its decisions live. Approved actions cross the private network to a fresh Kata guest on VM2.</p>
+      <div class="run-options" role="group" aria-label="Choose a remote task">
+        <label class="run-option"><input type="radio" name="task-case" value="safe_demo" checked><span><strong>One agent task</strong><small>Real model proposal, pre-exec judgment, sandbox action, and report.</small></span></label>
+        <label class="run-option"><input type="radio" name="task-case" value="readiness_evolution"><span><strong>Boundary evolution</strong><small>Strict before / Blue / fresh rerun proof in separate Kata guests.</small></span></label>
+      </div>
+      <div class="launch-actions"><button id="launch-task" class="launch-button" type="button" data-csrf="__TASK_CSRF__" disabled>Launch remote task ↗</button>
+        <span id="launch-status" class="launch-status" role="status" aria-live="polite">Checking control plane…</span></div>
+      <p class="launch-note">Only these server-owned cases can be launched here. The live pane shows bounded, sanitized events; credentials and raw tool arguments stay on VM1.</p>
+    </div>
+    <div class="launch-architecture" aria-label="Live task path">
+      <p class="architecture-label">Live architecture / two Vultr instances</p>
+      <div class="architecture-node"><strong>Browser dashboard</strong><span class="node-id">OPERATOR</span><small>Launch + observe over a loopback SSH tunnel</small></div>
+      <div class="architecture-hop"><span>same-origin request</span></div>
+      <div class="architecture-node"><strong>VM1 · Control agent</strong><span class="node-id">HOST</span><small>Python planner · model calls · policy gate · trajectory</small></div>
+      <div class="architecture-inference">↗ <strong>Vultr Serverless Inference</strong><br>Candidate, classifier, and Blue model calls</div>
+      <div class="architecture-hop"><span>approved action · private VPC</span></div>
+      <div class="architecture-node sandbox"><strong>VM2 · Sandbox host</strong><span class="node-id">WORKER</span><small>Disposable Kata/QEMU guest · output scan · teardown</small></div>
+    </div>
+  </section>
+  <!-- PRIVATE_LIVE_END -->
   <div class="section-label"><span>01 / Outcome telemetry</span><span>Recorded episodes</span></div>
   <section class="stats" id="overview" aria-label="Episode summary">
     <div class="card"><span class="label">Episodes</span><span class="metric-index" aria-hidden="true">01</span><span class="value" id="total">0</span></div>
@@ -433,10 +499,14 @@ HTML = r"""<!doctype html>
     let trajectorySource = null;
     let trajectoryPoll = null;
     let currentTaskId = '';
+    let currentJobId = '';
     let lastTrajectorySeq = 0;
     let taskActive = false;
+    let brokerActive = false;
     let closedTaskId = '';
+    let closedJobId = '';
     let lastTrajectoryPhase = '';
+    let launchPending = false;
     const taskStates = {running:'Running', complete:'Complete', completed:'Complete', failed:'Failed', error:'Failed', cancelled:'Cancelled'};
     const phaseNames = {
       task_start:'Task started', scenario:'Scenario selected', red:'Attack setup',
@@ -466,23 +536,35 @@ HTML = r"""<!doctype html>
       $('trajectory-empty').hidden = false;
       $('trajectory-task').textContent = taskId ? 'Task ' + taskId : 'Waiting for a task';
     }
+    function nextTrajectoryTask(taskId) {
+      currentTaskId = taskId;
+      $('trajectory-task').textContent = 'Task ' + taskId;
+      const divider = node('li', 'Next remote task · ' + taskId, 'trajectory-divider');
+      $('trajectory-events').append(divider);
+      $('trajectory-empty').hidden = true;
+    }
     function renderTrajectoryEvent(event, autoOpen = true) {
       if (!event || typeof event !== 'object' || Array.isArray(event)) return;
       const taskId = boundedText(event.task_id, 80);
       if (!taskId) return;
       const seq = Number(event.seq);
       if (!Number.isSafeInteger(seq) || seq <= lastTrajectorySeq) return;
-      if (taskId !== currentTaskId) resetTrajectory(taskId);
+      if (taskId !== currentTaskId) {
+        if (currentTaskId && brokerActive) nextTrajectoryTask(taskId);
+        else resetTrajectory(taskId);
+      }
       lastTrajectorySeq = seq;
       const phase = boundedText(event.phase, 40);
       lastTrajectoryPhase = phase;
       const status = boundedText(event.status, 24).toLowerCase();
       if (phase === 'task_start') {
         taskActive = true;
-        if (autoOpen && closedTaskId !== taskId) setTrajectoryOpen(true);
+        if (autoOpen && closedTaskId !== taskId && (!currentJobId || closedJobId !== currentJobId))
+          setTrajectoryOpen(true);
       } else if (phase === 'task_end' || phase === 'task_error') {
         taskActive = false;
         refresh();
+        loadTaskStatus();
       }
       const scroll = $('trajectory-scroll');
       const follow = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 90;
@@ -508,6 +590,84 @@ HTML = r"""<!doctype html>
       if (phase === 'task_end') taskState(status === 'cancelled' ? 'Remote task cancelled.' : 'Remote task complete.');
       if (phase === 'task_error') taskState('Remote task failed. Review the final event.');
     }
+    function showLaunchStatus(message, state = '') {
+      $('launch-status').textContent = message;
+      $('launch-status').className = 'launch-status' + (state ? ' ' + state : '');
+    }
+    function renderTaskStatus(data) {
+      if (launchPending) return;
+      const status = boundedText(data.status, 24).toLowerCase();
+      const taskId = boundedText(data.task_id, 80);
+      const jobId = boundedText(data.job_id, 80);
+      const active = data.active === true || status === 'queued' || status === 'running';
+      brokerActive = active;
+      if (jobId) currentJobId = jobId;
+      if (!active) closedJobId = '';
+      $('launch-task').disabled = active;
+      if (active) {
+        showLaunchStatus(status === 'queued' ? 'Queued on VM1' : 'Agent running on VM1', 'active');
+        if ((!currentJobId || closedJobId !== currentJobId) && (!taskId || closedTaskId !== taskId))
+          setTrajectoryOpen(true);
+      } else if (status === 'complete') {
+        showLaunchStatus(data.proof_complete === true ? 'Proof complete · ready for next task' :
+          'Task finished · inspect the trajectory');
+      } else if (status === 'failed' || status === 'interrupted') {
+        showLaunchStatus('Run ended without complete proof · ready to retry', 'error');
+      } else {
+        showLaunchStatus('Control plane ready');
+      }
+    }
+    async function loadTaskStatus() {
+      if (launchPending) return;
+      try {
+        const response = await fetch('/api/tasks/current', {cache:'no-store', credentials:'same-origin'});
+        if (!response.ok) throw new Error('status unavailable');
+        renderTaskStatus(await response.json());
+      } catch (_) {
+        $('launch-task').disabled = true;
+        showLaunchStatus('Task launcher unavailable', 'error');
+      }
+    }
+    async function launchTask() {
+      if (launchPending || $('launch-task').disabled) return;
+      const chosen = document.querySelector('input[name="task-case"]:checked');
+      const taskCase = chosen && chosen.value;
+      if (taskCase !== 'safe_demo' && taskCase !== 'readiness_evolution') return;
+      launchPending = true;
+      $('launch-task').disabled = true;
+      showLaunchStatus('Sending task to VM1…', 'active');
+      try {
+        const response = await fetch('/api/tasks', {
+          method:'POST', cache:'no-store', credentials:'same-origin',
+          headers:{'Content-Type':'application/json', 'X-Crucible-CSRF':$('launch-task').dataset.csrf},
+          body:JSON.stringify({case:taskCase})
+        });
+        if (response.status === 409) {
+          showLaunchStatus('Another remote task is active', 'active');
+          return;
+        }
+        if (response.status !== 202) throw new Error('launch rejected');
+        const result = await response.json();
+        const taskId = boundedText(result.task_id, 80);
+        const jobId = boundedText(result.job_id, 80);
+        if (!taskId && !jobId) throw new Error('missing task ID');
+        currentJobId = jobId;
+        brokerActive = true;
+        resetTrajectory(taskId);
+        taskActive = true;
+        closedTaskId = '';
+        closedJobId = '';
+        setTrajectoryOpen(true);
+        taskState('Queued on VM1; waiting for the live agent trajectory.');
+        showLaunchStatus('Queued on VM1', 'active');
+        loadTrajectorySnapshot();
+      } catch (_) {
+        showLaunchStatus('Launch failed · check the control plane', 'error');
+      } finally {
+        launchPending = false;
+        loadTaskStatus();
+      }
+    }
     async function loadTrajectorySnapshot() {
       try {
         const response = await fetch('/api/trajectory/snapshot', {cache:'no-store'});
@@ -519,7 +679,8 @@ HTML = r"""<!doctype html>
         if (taskId && currentTaskId && taskId !== currentTaskId) return;
         if (taskId && !currentTaskId) resetTrajectory(taskId);
         taskActive = data.active === true;
-        if (taskActive && taskId && closedTaskId !== taskId) setTrajectoryOpen(true);
+        if (taskActive && taskId && closedTaskId !== taskId && (!currentJobId || closedJobId !== currentJobId))
+          setTrajectoryOpen(true);
         if (taskActive) taskState('Task active; following agent and sandbox events.');
         else if (taskId && events.length) taskState('Latest remote task finished.');
       } catch (_) {
@@ -554,15 +715,18 @@ HTML = r"""<!doctype html>
     }
     $('show-trajectory').addEventListener('click', () => {
       const open = $('trajectory-pane').hidden;
-      if (!open) closedTaskId = currentTaskId;
-      else closedTaskId = '';
+      if (!open) { closedTaskId = currentTaskId; closedJobId = currentJobId; }
+      else { closedTaskId = ''; closedJobId = ''; }
       setTrajectoryOpen(open);
     });
     $('close-trajectory').addEventListener('click', () => {
       closedTaskId = currentTaskId;
+      closedJobId = currentJobId;
       setTrajectoryOpen(false);
       $('show-trajectory').focus();
     });
+    $('launch-task').addEventListener('click', launchTask);
+    loadTaskStatus(); setInterval(loadTaskStatus, 2500);
     loadTrajectorySnapshot().then(connectTrajectory);
     /* PRIVATE_LIVE_END */
     $('refresh').addEventListener('click', refresh);
