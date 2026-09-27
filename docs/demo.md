@@ -32,7 +32,11 @@ separate auditor replay.
    and privately save the complete transcript. Check its runtime, effective
    seccomp policy, successful pinned TLS, denied DNS and `ptrace`, the
    direct-IP probe counter before the final DROP, and container teardown.
-2. On the control VM, set `CRUCIBLE_REMOTE_TARGET=root@SANDBOX_VPC_IP`,
+2. Tunnel the control VM's loopback dashboard to the recording laptop using
+   the command in [Dashboard and recording](#dashboard-and-recording). Open it
+   before the remote CLI run so its right-side Agent trajectory pane can open
+   on the task-start event.
+3. On the control VM, set `CRUCIBLE_REMOTE_TARGET=root@SANDBOX_VPC_IP`,
    `CRUCIBLE_REMOTE_IDENTITY` to the owner-only control key, and
    `CRUCIBLE_REMOTE_KNOWN_HOSTS` to the pinned host-key file. With
    `CRUCIBLE_ENV_FILE=/etc/crucible/inference.env`, run
@@ -43,11 +47,16 @@ separate auditor replay.
    before Docker execution. Verify that the episode records say
    `execution_mode: remote`, contain verified worker results, a safe action,
    a validated report, and a destroyed container.
-3. Tunnel the control VM's loopback dashboard to the recording laptop. Keep
-   the sandbox wall proof beside it; dashboard metrics summarize episodes but
-   do not replace packet or syscall evidence. Generate the public static
-   snapshot only after reviewing the private bank and complete wall proof,
-   following [the public demo guide](public-demo.md).
+4. Keep the sandbox wall proof beside the dashboard; its metrics summarize
+   episodes but do not replace packet or syscall evidence. Generate the public
+   static snapshot only after reviewing the private bank and complete wall
+   proof, following [the public demo guide](public-demo.md).
+
+The Agent trajectory pane updates during
+red planning, worker proposals, pre-exec checks, sandbox execution, result
+review, blue adaptation, and teardown. The pane uses a read-only event stream
+from the private experience database. It shows bounded status facts rather
+than raw model text, commands, tool output, or container identifiers.
 
 The four-round command above is one model batch; the recorded 18-episode
 snapshot combines model batches and separate offline probes. Its attack rate

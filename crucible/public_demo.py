@@ -300,6 +300,14 @@ def public_snapshot(private: dict[str, Any]) -> dict[str, Any]:
 def _static_html() -> str:
     nonce = secrets.token_urlsafe(18)
     page = HTML.replace("__NONCE__", nonce)
+    # The private dashboard can observe live CLI tasks. Public Pages remains a
+    # fixed snapshot: remove its live pane, EventSource client, and controls.
+    page = re.sub(r"/\* PRIVATE_LIVE_START \*/.*?/\* PRIVATE_LIVE_END \*/", "", page,
+                  flags=re.DOTALL)
+    page = re.sub(r"<!-- PRIVATE_LIVE_START -->.*?<!-- PRIVATE_LIVE_END -->", "", page,
+                  flags=re.DOTALL)
+    if "PRIVATE_LIVE_" in page or "/api/trajectory" in page or "trajectory-pane" in page:
+        raise ValueError("private live dashboard markup remains in public export")
     page = page.replace("<title>CRUCIBLE · Containment evidence</title>",
                         "<title>CRUCIBLE · Public demo snapshot</title>")
     page = page.replace("<p class=\"eyebrow\">CRUCIBLE / evidence readout</p>",

@@ -42,6 +42,15 @@ python3 -m crucible.dashboard --db data/experience.sqlite --host 127.0.0.1 --por
 
 Open `http://127.0.0.1:8787` on the same host for the read-only dashboard; for a VM, use an SSH tunnel as shown in the [runbook](docs/demo.md). The live curves include verified same-host Docker and remote sandbox VM episodes: attack success, and `containment_held` **and** `task_completed`. The dashboard shows the two execution modes separately. Completion requires the exact safe action to exit successfully and a sanitized final report to pass the scenario rubric. Simulated fixture completion is shown separately. The latest report panel shows a sanitized completed report. These records do not replace the packet or syscall evidence needed for a live wall proof. Bind to loopback by default; use an authenticated TLS reverse proxy if sharing it outside the VM.
 
+When a remote CLI task starts, the private dashboard automatically opens a
+right-side **Agent trajectory** pane. It shows red setup, worker proposals,
+pre-execution verdicts, in-flight sandbox actions, results, supervisor and
+blue phases, and teardown as they occur. The feed uses fixed labels, action
+kinds, policy dimensions, and exit codes; it omits raw prompts, commands,
+outputs, URLs, credentials, and container IDs. The CLI keeps launch authority
+and the dashboard remains read-only. The public Pages snapshot has no live
+feed. See [the runbook](docs/demo.md) for the remote CLI command and tunnel.
+
 The live Vultr catalog is [`GET /v1/models`](https://api.vultrinference.com/v1/models). The user-supplied `/v1/chat/models` path returned HTTP 404 on September 26, 2026; `/v1/models` returned 200. The supplied [Serverless Inference documentation path](https://docs.vultr.com/products/serverless/inference) redirects to the current [Serverless Inference section](https://docs.vultr.com/products/compute/serverless-inference). `smoke` checks all configured role IDs against the catalog without a key. Add `--chat` only when an inference key is available; that makes one small billed chat request.
 
 ## Vultr access and credentials

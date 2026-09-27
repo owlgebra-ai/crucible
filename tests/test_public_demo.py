@@ -120,6 +120,10 @@ class PublicDemoTests(unittest.TestCase):
         body = (self.site / "snapshot.json").read_text()
         self.assertNotIn(secret, html + body)
         self.assertNotIn("/api/snapshot", html)
+        self.assertNotIn("/api/trajectory", html)
+        self.assertNotIn("EventSource", html)
+        self.assertNotIn("trajectory-pane", html)
+        self.assertNotIn("PRIVATE_LIVE_", html)
         self.assertIn("./snapshot.json", html)
         self.assertIn("Content-Security-Policy", html)
         self.assertEqual(json.loads(body)["patterns"][0]["attack_shape"],

@@ -13,11 +13,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
 import secrets
-from urllib.parse import urlsplit
+import threading
+import time
+from urllib.parse import parse_qs, urlsplit
 
 from crucible.experience import ExperienceBank
 from crucible.plugins.d6_output_filter import OutputFilterPlugin
 from crucible.scenarios import CANARY
+from crucible.trajectory import TrajectoryStore
 
 
 HTML = r"""<!doctype html>
@@ -69,14 +72,50 @@ HTML = r"""<!doctype html>
     .pattern small { display: block; color: #a8b9bd; margin-top: 3px; }
     .empty { color: #a8b9bd; padding: 16px 0; }
     .error { color: #ffbbb4; }
+    /* PRIVATE_LIVE_START */
+    body.trajectory-open { max-width: 1660px; }
+    .dashboard-layout.trajectory-open { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 390px); gap: 16px; align-items: start; }
+    .dashboard-layout > main { min-width: 0; }
+    .trajectory-actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+    .trajectory-pane { position: sticky; top: 14px; height: calc(100vh - 28px); min-height: 440px; overflow: hidden; display: flex; flex-direction: column; background: #172831; border: 1px solid #42606a; border-radius: 11px; }
+    .trajectory-pane[hidden] { display: none; }
+    .trajectory-head { display: flex; gap: 10px; justify-content: space-between; align-items: start; padding: 17px 18px 12px; border-bottom: 1px solid #304750; }
+    .trajectory-head h2 { font-size: 1.12rem; margin: 0; }
+    .trajectory-head button { margin: 0; padding: 4px 9px; }
+    .trajectory-summary { padding: 12px 18px; border-bottom: 1px solid #304750; }
+    .trajectory-summary strong { display: block; font-size: .86rem; overflow-wrap: anywhere; }
+    .trajectory-summary .subtle { margin-top: 3px; }
+    .trajectory-scroll { overflow-y: auto; overscroll-behavior: contain; padding: 8px 18px 24px; flex: 1; }
+    .trajectory-list { list-style: none; margin: 0; padding: 0 0 0 13px; border-left: 1px solid #47636b; }
+    .trajectory-event { position: relative; margin: 0 0 15px 14px; padding: 0 0 0 1px; overflow-wrap: anywhere; }
+    .trajectory-event::before { content: ''; position: absolute; width: 8px; height: 8px; border-radius: 50%; background: #83b1ba; left: -19px; top: 7px; }
+    .trajectory-event.deny::before, .trajectory-event.error::before { background: #ff908a; }
+    .trajectory-event.allow::before, .trajectory-event.complete::before { background: #6fe5b3; }
+    .trajectory-event-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+    .trajectory-phase { font-size: .88rem; font-weight: 700; }
+    .trajectory-time { color: #9fb4b9; font-size: .73rem; white-space: nowrap; font-variant-numeric: tabular-nums; }
+    .trajectory-meta { color: #a8b9bd; font-size: .75rem; margin-top: 2px; }
+    .trajectory-detail { color: #dce8e9; font-size: .83rem; white-space: pre-wrap; margin-top: 5px; }
+    .trajectory-empty { color: #a8b9bd; padding-top: 12px; font-size: .86rem; }
+    @media (max-width: 950px) {
+      .dashboard-layout.trajectory-open { display: block; }
+      .trajectory-pane { position: fixed; z-index: 10; left: 8px; right: 8px; bottom: 8px; top: auto; height: min(70vh, 720px); min-height: 300px; box-shadow: 0 0 0 100vmax #08121999; }
+      .trajectory-actions { justify-content: flex-start; }
+    }
+    /* PRIVATE_LIVE_END */
     @media (max-width: 760px) { .stats, .panel-grid { grid-template-columns: 1fr; } .meta { text-align: left; } }
   </style>
 </head>
 <body>
+  <div class="dashboard-layout" id="dashboard-layout"><main>
   <header>
     <div><p class="eyebrow">CRUCIBLE / evidence readout</p><h1>Containment under pressure</h1>
       <p class="subtle">Recorded episodes only. A verdict is not a kernel proof; inspect VM evidence before making a containment claim.</p></div>
-    <div class="meta"><span id="updated">Waiting for records</span><br><button id="refresh" type="button">Refresh</button></div>
+    <div class="meta"><span id="updated">Waiting for records</span><br><button id="refresh" type="button">Refresh</button>
+      <!-- PRIVATE_LIVE_START -->
+      <div class="trajectory-actions"><button id="show-trajectory" type="button" aria-controls="trajectory-pane" aria-expanded="false">Show trajectory</button></div>
+      <!-- PRIVATE_LIVE_END -->
+    </div>
   </header>
   <section class="stats" aria-label="Episode summary">
     <div class="card"><span class="label">Episodes</span><span class="value" id="total">0</span></div>
@@ -99,6 +138,18 @@ HTML = r"""<!doctype html>
       <thead><tr><th>Round</th><th>Action / result</th><th>Pre-exec verdict</th><th>Control</th></tr></thead><tbody id="events"></tbody>
     </table><p id="events-empty" class="empty">No actions recorded yet.</p></div></section>
     <section class="card"><h2>Attack / defense patterns</h2><div id="patterns"><p class="empty">No patterns recorded yet.</p></div></section>
+  </div>
+  </main>
+  <!-- PRIVATE_LIVE_START -->
+  <aside id="trajectory-pane" class="trajectory-pane" aria-labelledby="trajectory-title" hidden>
+    <div class="trajectory-head"><div><p class="eyebrow">Live remote task</p><h2 id="trajectory-title">Agent trajectory</h2></div>
+      <button id="close-trajectory" type="button" aria-label="Close agent trajectory">Close</button></div>
+    <div class="trajectory-summary"><strong id="trajectory-task">Waiting for a task</strong>
+      <p id="trajectory-state" class="subtle" role="status" aria-live="polite">Connect to observe the next remote run.</p></div>
+    <div class="trajectory-scroll" id="trajectory-scroll"><ol id="trajectory-events" class="trajectory-list" aria-label="Remote task events"></ol>
+      <p id="trajectory-empty" class="trajectory-empty">No task events yet.</p></div>
+  </aside>
+  <!-- PRIVATE_LIVE_END -->
   </div>
   <script nonce="__NONCE__">
     const $ = id => document.getElementById(id);
@@ -184,6 +235,142 @@ HTML = r"""<!doctype html>
         $('updated').textContent = 'Snapshot unavailable'; $('updated').className = 'error';
       }
     }
+    /* PRIVATE_LIVE_START */
+    let trajectorySource = null;
+    let trajectoryPoll = null;
+    let currentTaskId = '';
+    let lastTrajectorySeq = 0;
+    let taskActive = false;
+    let closedTaskId = '';
+    let lastTrajectoryPhase = '';
+    const taskStates = {running:'Running', complete:'Complete', completed:'Complete', failed:'Failed', error:'Failed', cancelled:'Cancelled'};
+    const phaseNames = {
+      task_start:'Task started', scenario:'Scenario selected', red:'Attack setup',
+      worker:'Agent proposal', proposal:'Agent proposal', preexec:'Pre-exec decision',
+      pre_exec:'Pre-exec decision', remote_exec:'Sandbox execution', sandbox:'Sandbox execution',
+      result:'Sandbox result', supervisor:'Supervisor review', blue:'Defense update',
+      report:'Agent report', teardown:'Sandbox teardown', task_end:'Task finished',
+      task_error:'Task failed'
+    };
+    function boundedText(value, length) {
+      return typeof value === 'string' ? value.slice(0, length) : '';
+    }
+    function setTrajectoryOpen(open) {
+      $('trajectory-pane').hidden = !open;
+      $('dashboard-layout').classList.toggle('trajectory-open', open);
+      document.body.classList.toggle('trajectory-open', open);
+      $('show-trajectory').setAttribute('aria-expanded', open ? 'true' : 'false');
+      $('show-trajectory').textContent = open ? 'Hide trajectory' : 'Show trajectory';
+      if (open) $('trajectory-scroll').scrollTop = $('trajectory-scroll').scrollHeight;
+    }
+    function taskState(message) {
+      $('trajectory-state').textContent = message;
+    }
+    function resetTrajectory(taskId) {
+      currentTaskId = taskId;
+      $('trajectory-events').replaceChildren();
+      $('trajectory-empty').hidden = false;
+      $('trajectory-task').textContent = taskId ? 'Task ' + taskId : 'Waiting for a task';
+    }
+    function renderTrajectoryEvent(event, autoOpen = true) {
+      if (!event || typeof event !== 'object' || Array.isArray(event)) return;
+      const taskId = boundedText(event.task_id, 80);
+      if (!taskId) return;
+      const seq = Number(event.seq);
+      if (!Number.isSafeInteger(seq) || seq <= lastTrajectorySeq) return;
+      if (taskId !== currentTaskId) resetTrajectory(taskId);
+      lastTrajectorySeq = seq;
+      const phase = boundedText(event.phase, 40);
+      lastTrajectoryPhase = phase;
+      const status = boundedText(event.status, 24).toLowerCase();
+      if (phase === 'task_start') {
+        taskActive = true;
+        if (autoOpen && closedTaskId !== taskId) setTrajectoryOpen(true);
+      } else if (phase === 'task_end' || phase === 'task_error') {
+        taskActive = false;
+        refresh();
+      }
+      const scroll = $('trajectory-scroll');
+      const follow = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 90;
+      const statusClass = status === 'ok' ? 'complete' : status === 'failed' ? 'error' :
+        (['deny','allow','error','complete'].includes(status) ? status : '');
+      const item = node('li', undefined, 'trajectory-event ' + statusClass);
+      const head = node('div', undefined, 'trajectory-event-head');
+      head.append(node('span', boundedText(event.label, 100) || phaseNames[phase] || 'Agent event', 'trajectory-phase'));
+      const when = new Date(boundedText(event.timestamp, 40));
+      head.append(node('time', Number.isNaN(when.getTime()) ? '' : when.toLocaleTimeString(), 'trajectory-time'));
+      item.append(head);
+      const meta = [boundedText(event.episode_id, 80), phaseNames[phase] || phase,
+        taskStates[status] || status].filter(Boolean).join(' · ');
+      if (meta) item.append(node('p', meta, 'trajectory-meta'));
+      const detail = boundedText(event.detail, 500);
+      if (detail) item.append(node('p', detail, 'trajectory-detail'));
+      $('trajectory-events').append(item);
+      while ($('trajectory-events').childElementCount > 150) $('trajectory-events').firstElementChild.remove();
+      $('trajectory-empty').hidden = true;
+      if (follow) scroll.scrollTop = scroll.scrollHeight;
+      if (phase === 'task_start') taskState('Task started; following agent and sandbox events.');
+      if (phase === 'remote_exec') taskState('Sandbox action in progress.');
+      if (phase === 'task_end') taskState(status === 'cancelled' ? 'Remote task cancelled.' : 'Remote task complete.');
+      if (phase === 'task_error') taskState('Remote task failed. Review the final event.');
+    }
+    async function loadTrajectorySnapshot() {
+      try {
+        const response = await fetch('/api/trajectory/snapshot', {cache:'no-store'});
+        if (!response.ok) throw new Error('snapshot unavailable');
+        const data = await response.json();
+        const taskId = boundedText(data.task_id, 80);
+        const events = Array.isArray(data.events) ? data.events.slice(-150) : [];
+        for (const event of events) renderTrajectoryEvent(event, false);
+        if (taskId && currentTaskId && taskId !== currentTaskId) return;
+        if (taskId && !currentTaskId) resetTrajectory(taskId);
+        taskActive = data.active === true;
+        if (taskActive && taskId && closedTaskId !== taskId) setTrajectoryOpen(true);
+        if (taskActive) taskState('Task active; following agent and sandbox events.');
+        else if (taskId && events.length) taskState('Latest remote task finished.');
+      } catch (_) {
+        if (!trajectorySource || trajectorySource.readyState !== EventSource.OPEN)
+          taskState('Live trajectory unavailable. Retrying…');
+      }
+    }
+    function startTrajectoryPolling() {
+      if (!trajectoryPoll) trajectoryPoll = setInterval(loadTrajectorySnapshot, 2500);
+    }
+    function connectTrajectory() {
+      if (!window.EventSource) {
+        taskState('Live stream unsupported; refreshing trajectory.');
+        startTrajectoryPolling();
+        return;
+      }
+      trajectorySource = new EventSource('/api/trajectory?after=' + encodeURIComponent(lastTrajectorySeq));
+      const receive = message => {
+        try { renderTrajectoryEvent(JSON.parse(message.data)); } catch (_) { /* Ignore malformed events. */ }
+      };
+      trajectorySource.onmessage = receive;
+      trajectorySource.addEventListener('trajectory', receive);
+      trajectorySource.onopen = () => {
+        if (trajectoryPoll) { clearInterval(trajectoryPoll); trajectoryPoll = null; }
+        if (taskActive) taskState(lastTrajectoryPhase === 'remote_exec' ?
+          'Sandbox action in progress.' : 'Task active; following agent and sandbox events.');
+      };
+      trajectorySource.onerror = () => {
+        if (taskActive) taskState('Live connection interrupted; refreshing trajectory.');
+        startTrajectoryPolling();
+      };
+    }
+    $('show-trajectory').addEventListener('click', () => {
+      const open = $('trajectory-pane').hidden;
+      if (!open) closedTaskId = currentTaskId;
+      else closedTaskId = '';
+      setTrajectoryOpen(open);
+    });
+    $('close-trajectory').addEventListener('click', () => {
+      closedTaskId = currentTaskId;
+      setTrajectoryOpen(false);
+      $('show-trajectory').focus();
+    });
+    loadTrajectorySnapshot().then(connectTrajectory);
+    /* PRIVATE_LIVE_END */
     $('refresh').addEventListener('click', refresh);
     refresh(); setInterval(refresh, 5000);
   </script>
@@ -309,9 +496,12 @@ def build_snapshot(db_path: str | Path, *, limit: int = 200) -> dict:
 
 
 def make_handler(db_path: Path, limit: int) -> type[BaseHTTPRequestHandler]:
+    stream_slots = threading.BoundedSemaphore(8)
+
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
-            route = urlsplit(self.path).path
+            parsed = urlsplit(self.path)
+            route = parsed.path
             if route == "/":
                 nonce = secrets.token_urlsafe(16)
                 body = HTML.replace("__NONCE__", nonce).encode("utf-8")
@@ -324,10 +514,66 @@ def make_handler(db_path: Path, limit: int) -> type[BaseHTTPRequestHandler]:
                     self._reply(500, "application/json", b'{"error":"snapshot unavailable"}')
                     return
                 self._reply(200, "application/json", body)
+            elif route == "/api/trajectory/snapshot":
+                try:
+                    snapshot = TrajectoryStore(db_path, read_only=True).snapshot(limit=150)
+                    body = json.dumps(snapshot, ensure_ascii=True, separators=(",", ":")).encode("ascii")
+                except Exception:
+                    self._reply(503, "application/json", b'{"error":"trajectory unavailable"}')
+                    return
+                self._reply(200, "application/json", body)
+            elif route == "/api/trajectory":
+                if not stream_slots.acquire(blocking=False):
+                    self._reply(503, "text/plain; charset=utf-8", b"too many trajectory viewers\n")
+                    return
+                try:
+                    self._trajectory_stream(parsed.query)
+                finally:
+                    stream_slots.release()
             elif route == "/healthz":
                 self._reply(200, "text/plain; charset=utf-8", b"ok\n")
             else:
                 self._reply(404, "text/plain; charset=utf-8", b"not found\n")
+
+        def _trajectory_stream(self, query: str) -> None:
+            def sequence(value: str) -> int:
+                if len(value) > 19 or not value.isascii() or not value.isdecimal():
+                    return 0
+                return min(int(value), 2**63 - 1)
+
+            after = parse_qs(query, keep_blank_values=False).get("after", ["0"])[0]
+            cursor = max(sequence(after), sequence(self.headers.get("Last-Event-ID", "")))
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("X-Accel-Buffering", "no")
+            self.end_headers()
+            try:
+                self.wfile.write(b"retry: 1500\n\n")
+                self.wfile.flush()
+                heartbeat = time.monotonic()
+                deadline = heartbeat + 30
+                while time.monotonic() < deadline:
+                    events = TrajectoryStore(db_path, read_only=True).events_since(cursor, limit=100)
+                    for event in events:
+                        cursor = max(cursor, int(event["seq"]))
+                        payload = json.dumps(event, ensure_ascii=True, separators=(",", ":"))
+                        self.wfile.write(f"id: {cursor}\nevent: trajectory\ndata: {payload}\n\n".encode("ascii"))
+                    if events:
+                        self.wfile.flush()
+                    now = time.monotonic()
+                    if now - heartbeat >= 5:
+                        self.wfile.write(b": heartbeat\n\n")
+                        self.wfile.flush()
+                        heartbeat = now
+                    time.sleep(0.35)
+            except (BrokenPipeError, ConnectionResetError, TimeoutError, OSError):
+                return
+            except Exception:
+                # Database or client failures end this stream. EventSource
+                # reconnects; the existing episode runner is unaffected.
+                return
 
         def _reply(self, status: int, content_type: str, body: bytes, *, csp: str | None = None) -> None:
             self.send_response(status)

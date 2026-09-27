@@ -11,6 +11,7 @@ from urllib.request import urlopen
 from crucible.dashboard import build_snapshot, make_handler
 from crucible.experience import ExperienceBank
 from crucible.scenarios import CANARY
+from crucible.trajectory import TrajectoryStore
 
 
 class DashboardTests(unittest.TestCase):
@@ -104,6 +105,44 @@ class DashboardTests(unittest.TestCase):
                 body = response.read().decode()
                 self.assertNotIn(CANARY, body)
                 self.assertEqual(json.loads(body)["summary"]["total"], 3)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+
+    def test_live_trajectory_snapshot_and_sse_follow_cli_task(self):
+        store = TrajectoryStore(self.db_path)
+        task_id = store.claim_task()
+        store.mark_running(task_id)
+        store.append(task_id, "remote_exec", "pending", action="file_read")
+        server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(self.db_path, 20))
+        server.daemon_threads = True
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{server.server_port}"
+        try:
+            with urlopen(base + "/api/trajectory/snapshot") as response:
+                snapshot = json.load(response)
+            self.assertTrue(snapshot["active"])
+            self.assertEqual(snapshot["task_id"], task_id)
+            self.assertEqual(snapshot["events"][0]["phase"], "task_start")
+            self.assertEqual(snapshot["events"][1]["phase"], "remote_exec")
+            self.assertNotIn(CANARY, json.dumps(snapshot))
+
+            after = snapshot["events"][-1]["seq"]
+            with urlopen(base + f"/api/trajectory?after={after}", timeout=3) as response:
+                self.assertEqual(response.headers.get_content_type(), "text/event-stream")
+                store.append(task_id, "preexec", "deny", action="file_read", dimension="D3")
+                lines = []
+                for _ in range(8):
+                    line = response.readline().decode("utf-8")
+                    lines.append(line)
+                    if line.startswith("data: "):
+                        break
+                event_line = next(line for line in lines if line.startswith("data: "))
+                event = json.loads(event_line[6:])
+                self.assertEqual(event["phase"], "preexec")
+                self.assertEqual(event["detail"], "file read · D3")
         finally:
             server.shutdown()
             server.server_close()

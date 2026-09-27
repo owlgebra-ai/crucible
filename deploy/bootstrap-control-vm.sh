@@ -96,6 +96,8 @@ with urlopen("http://127.0.0.1:8787/healthz", timeout=2) as response:
     assert response.status == 200 and response.read() == b"ok\n"
 with urlopen("http://127.0.0.1:8787/api/snapshot", timeout=2) as response:
     assert response.status == 200
+with urlopen("http://127.0.0.1:8787/api/trajectory/snapshot", timeout=2) as response:
+    assert response.status == 200
 PY
   then
     if systemctl is-active --quiet crucible-dashboard.service; then HEALTHY=1; break; fi
