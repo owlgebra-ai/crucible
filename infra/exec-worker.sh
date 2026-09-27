@@ -22,6 +22,15 @@ TIMEOUT="${CRUCIBLE_TIMEOUT_SEC:-60}"
   echo "container is not a CRUCIBLE-managed worker" >&2
   exit 2
 }
+EFFECTIVE_RUNTIME="$(docker inspect --format '{{.HostConfig.Runtime}}' "$CID")"
+EXPECTED_RUNTIME="${CRUCIBLE_RUNTIME:-runc}"
+[[ "$EXPECTED_RUNTIME" == "$EFFECTIVE_RUNTIME" ]] || {
+  echo "worker runtime differs from the selected execution policy" >&2
+  exit 77
+}
+if [[ "$EXPECTED_RUNTIME" == kata-qemu ]]; then
+  python3 "$(dirname "${BASH_SOURCE[0]}")/verify-kata.py" "$CID" >/dev/null
+fi
 if [[ $# -eq 0 ]]; then
   set -- python -m crucible.worker --action-file -
 fi

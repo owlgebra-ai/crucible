@@ -12,8 +12,8 @@ done
 INFRA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STATE_FILE="${CRUCIBLE_STATE_DIR:-/var/lib/crucible}/net.json"
 WALL_RUNTIME="${CRUCIBLE_RUNTIME:-runc}"
-[[ "$WALL_RUNTIME" == runc || "$WALL_RUNTIME" == runsc-oci ]] || {
-  echo "UNVERIFIED: CRUCIBLE_RUNTIME must be runc or runsc-oci" >&2
+[[ "$WALL_RUNTIME" == runc || "$WALL_RUNTIME" == runsc-oci || "$WALL_RUNTIME" == kata-qemu ]] || {
+  echo "UNVERIFIED: CRUCIBLE_RUNTIME must be runc, runsc-oci, or kata-qemu" >&2
   exit 77
 }
 
@@ -117,6 +117,29 @@ if [[ "$WALL_RUNTIME" == runsc-oci ]]; then
   # HostConfig proves which alias Docker used, while Docker info proves the
   # alias actually maps to runsc with OCI seccomp and sandbox networking.
   python3 "$INFRA_DIR/verify-runtime.py"
+elif [[ "$WALL_RUNTIME" == kata-qemu ]]; then
+  KATA_PROOF="$(python3 "$INFRA_DIR/verify-kata.py" "$CID" "$NET")"
+  python3 - "$KATA_PROOF" <<'PY'
+import json
+import sys
+proof = json.loads(sys.argv[1])
+if (proof['runtime'] != 'kata-qemu' or
+        proof['guest_kernel'] == proof['host_kernel'] or
+        proof['guest_seccomp'] is not True or
+        proof['qemu_kvm_pid'] <= 0 or
+        int(proof['guest_memory_max']) > 512 * 1024 * 1024):
+    raise SystemExit('UNVERIFIED: Kata task attestation failed')
+quota, period = map(int, proof['guest_cpu_max'].split())
+if not 0 < quota <= period:
+    raise SystemExit('UNVERIFIED: Kata guest CPU quota failed')
+print('kata-qemu effective Docker runtime: OK')
+print('kata-qemu guest kernel differs from host: OK')
+print('kata-qemu KVM-backed QEMU: OK')
+print('kata-qemu guest seccomp: OK')
+print('kata-qemu guest CPU/memory limit: OK')
+print('kata-qemu guest kernel:', proof['guest_kernel'])
+print('kata-qemu host kernel:', proof['host_kernel'])
+PY
 fi
 CONTAINER_IP="$(python3 - "$CID" "$NET" "$SUBNET" <<'PY'
 import ipaddress
@@ -181,6 +204,7 @@ echo "Direct-IP destination: 1.1.1.1:443"
 echo "Probe-specific packets immediately before default DROP: $TRACE_COUNT"
 echo "Default DROP remains the next and final egress rule"
 "$INFRA_DIR/destroy-worker.sh" "$CID"
+DESTROYED_CID="$CID"
 CID=""
 
 echo "[4/5] Container teardown"
@@ -189,5 +213,17 @@ if [[ -n "$(docker ps -aq --filter "label=crucible.episode=$PROBE_ID")" ]]; then
   exit 1
 fi
 echo "No container remains for $PROBE_ID"
+if [[ "$WALL_RUNTIME" == kata-qemu ]]; then
+  for attempt in {1..10}; do
+    if python3 "$INFRA_DIR/verify-kata.py" --destroyed "$DESTROYED_CID"; then
+      break
+    fi
+    if ((attempt == 10)); then
+      echo "FAILED: task microVM survived teardown" >&2
+      exit 1
+    fi
+    sleep 0.5
+  done
+fi
 
 echo "[5/5] Wall proof complete"

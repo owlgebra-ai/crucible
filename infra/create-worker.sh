@@ -115,7 +115,8 @@ RUNTIME="${CRUCIBLE_RUNTIME:-runc}"
 case "$RUNTIME" in
   runc) ;;
   runsc-oci) python3 "$INFRA_DIR/verify-runtime.py" --quiet >&2 ;;
-  *) echo "CRUCIBLE_RUNTIME must be runc or runsc-oci" >&2; exit 2 ;;
+  kata-qemu) python3 "$INFRA_DIR/verify-kata.py" --quiet >&2 ;;
+  *) echo "CRUCIBLE_RUNTIME must be runc, runsc-oci, or kata-qemu" >&2; exit 2 ;;
 esac
 
 # Build from the current source for every live session, then pin the exact
@@ -151,6 +152,13 @@ CID="$(docker run --detach --rm --name "$NAME" \
   --ulimit nofile=256:256 --init --stop-timeout 2 --log-driver none \
   --env CRUCIBLE_SCENARIO_DIR=/work/scenario \
   "$IMAGE_ID" python -c 'import time; time.sleep(900)')"
+
+# Docker's requested alias alone is insufficient proof of a microVM. Check
+# the effective runtime, separate guest kernel, actual KVM-backed QEMU, guest
+# seccomp, and guest resource limits before giving it untrusted scenario data.
+if [[ "$RUNTIME" == kata-qemu ]]; then
+  python3 "$INFRA_DIR/verify-kata.py" "$CID" "$NET" >&2
+fi
 
 python3 "$INFRA_DIR/stage-scenario.py" "$SCENARIO_DIR" | \
   docker exec --interactive "$CID" python /opt/crucible/extract-scenario.py
