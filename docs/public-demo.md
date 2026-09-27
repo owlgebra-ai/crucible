@@ -1,13 +1,21 @@
 # Public static demo
 
-The private dashboard reads the experience bank on the VM. Its action details,
-model text, and proof transcripts must not be copied to a public site. Use the
-separate exporter in `crucible/public_demo.py` for GitHub Pages. It emits only
+The private dashboard reads the experience bank on the VM. Do not copy its raw
+action records, model text, or proof transcripts to a public site. Use the
+separate exporter in `crucible/public_demo.py` for the aggregate GitHub Pages
+readout. It emits only
 numeric rates/counts, fixed action and defense labels, and one of four exact
 supervisor-approved report sentences. It can also include a fixed-field wall
 summary parsed from the private `infra/prove-wall.sh` transcript. It drops
 URLs, payloads, IPs, container/image IDs, free-form reasons, private proof
 logs, and unknown attack shapes.
+
+The separate [real-model readiness case](real-model-elicitation.md) is a
+manually reviewed evidence artifact. It publishes the non-secret exact command
+`sleep 20`, bounded outcome fields, and episode IDs so the before/after claim
+can be inspected. It does not publish the raw bank, model responses, worker
+output, VM addresses, or credentials, and its three isolated episodes are not
+included in the earlier aggregate snapshot.
 
 Generate a preview after the Linux wall proof and model-driven container run:
 
