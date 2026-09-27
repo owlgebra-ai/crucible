@@ -224,6 +224,7 @@ if [[ "$WALL_RUNTIME" == kata-qemu ]]; then
     fi
     sleep 0.5
   done
+  echo "kata-qemu task microVM destroyed: OK"
 fi
 
 echo "[5/5] Wall proof complete"

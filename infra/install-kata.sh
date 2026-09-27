@@ -24,7 +24,7 @@ esac
   echo "Kata installer is scoped to Ubuntu 24.04" >&2
   exit 77
 }
-for binary in curl docker dpkg python3 sha256sum tar systemctl; do
+for binary in curl docker dpkg flock python3 sha256sum tar systemctl; do
   command -v "$binary" >/dev/null || { echo "missing $binary" >&2; exit 77; }
 done
 python3 - <<'PY'
@@ -144,6 +144,30 @@ runtimes['kata-qemu'] = {
 (work / 'daemon.json.previous').write_text(path.read_text() if path.exists() else '{}\n')
 PY
 
+# The forced gateway holds this same lock across session creation. Acquire it
+# only after downloading and checking the release, then keep it until the
+# daemon has restarted and its effective runtime has been verified.
+umask 077
+exec 9<>/var/lock/crucible-remote-gateway.lock
+flock -x 9
+python3 - <<'PY'
+import os
+import stat
+
+path = '/var/lock/crucible-remote-gateway.lock'
+opened = os.fstat(9)
+named = os.lstat(path)
+if (not stat.S_ISREG(opened.st_mode) or not stat.S_ISREG(named.st_mode)
+        or opened.st_uid != 0 or opened.st_mode & 0o077
+        or (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino)):
+    raise SystemExit('unsafe gateway creation lock')
+PY
+MANAGED_CONTAINERS="$(docker ps -aq --filter label=crucible.managed=true)"
+[[ -z "$MANAGED_CONTAINERS" ]] || {
+  echo "worker tasks exist; refusing Kata install and Docker restart" >&2
+  exit 75
+}
+
 mv "$STAGED_KATA" /opt/kata
 install -d -m 0755 /etc/crucible /etc/docker
 install -m 0644 "$WORK_DIR/kata-qemu.toml" /etc/crucible/kata-qemu.toml
@@ -183,6 +207,11 @@ if [[ -e /etc/docker/daemon.json ]]; then
 fi
 install -m 0644 "$WORK_DIR/daemon.json.new" /etc/docker/daemon.json.crucible-kata-new
 mv -f /etc/docker/daemon.json.crucible-kata-new /etc/docker/daemon.json
+MANAGED_CONTAINERS="$(docker ps -aq --filter label=crucible.managed=true)"
+[[ -z "$MANAGED_CONTAINERS" ]] || {
+  echo "worker tasks appeared before Docker restart; refusing restart" >&2
+  exit 75
+}
 systemctl restart docker
 
 DEFAULT_AFTER="$(docker info --format '{{.DefaultRuntime}}')"
