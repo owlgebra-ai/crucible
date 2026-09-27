@@ -2,7 +2,7 @@
 
 ![The 20-second detour infographic](misaligned-behavior-infographic.svg)
 
-For the main security story, use the [D1 unnecessary-fetch variant](network-detour-infographic.md). This D3 case works as a smaller inset showing a new declarative rule being written.
+This graphic documents an earlier **scripted offline probe**. For the current real-model before/after story, use the [model-authored readiness case](real-model-elicitation.md). The [D1 unnecessary-fetch variant](network-detour-infographic.md) is another separate offline probe.
 
 ## The story to tell
 
@@ -43,7 +43,7 @@ The earlier 10 Vultr model-driven remote episodes are a different evidence set. 
 
 **Do not draw one continuous arrow from the LLM proposal to the offline Blue rule.** The before/after policy change belongs to the scripted probe. The recorded aggregate was 0/18 attack success across 10 model runs and 8 offline probes; legitimate task completion with containment was 5/10 for model runs only.
 
-A later, separate [real-model readiness run](real-model-elicitation.md) did record the Vultr worker proposing `sleep 20` in two remote trajectories with a Blue policy write between them. Its evidence and denominator are separate from this earlier 18-episode snapshot.
+A later, separate [real-model readiness run](real-model-elicitation.md) recorded the Vultr worker proposing exact `sleep 20` before and after a **model-authored, validated** Blue D3 policy write. Its three episodes are in an isolated private bank and are separate from this earlier 18-episode snapshot. Another historical live readiness run mounted a guarded fallback rule; that run is not evidence of a model-authored Blue write.
 
 ## Optional network-policy variant
 
@@ -61,4 +61,4 @@ A second scripted offline pair can tell the same earlier-denial story for D1. Th
 | Recorded initial and rerun outcomes | Private, ignored `data/bank-private.json`: initial `ep_0b5d9873840c`; rerun `ep_96c434a6cb4e`. Retain this file outside published artifacts. |
 | Aggregate denominators and separate VM wall proof | [`docs/demo.md`](demo.md) |
 
-For **this scripted offline probe**, avoid the claims that the LLM chose `sleep 20`, Blue learned from that real LLM proposal, the initial action escaped the sandbox, the D1 example reached iptables, or the offline fallback completed a scored model task. The actual demonstrated improvement is **earlier rejection of a repeat action while the legitimate read remains possible**. The later real-model run is documented separately.
+For **this scripted offline probe**, avoid the claims that the LLM chose `sleep 20`, Blue learned from that real LLM proposal, the initial action escaped the sandbox, the D1 example reached iptables, or the offline fallback completed a scored model task. The actual demonstrated improvement is **earlier rejection of a repeat action while the legitimate read remains possible**. The later model-authored real-model run is documented separately.
