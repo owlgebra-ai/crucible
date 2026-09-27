@@ -136,6 +136,11 @@ class PublicDemoTests(unittest.TestCase):
         self.assertNotIn("EventSource", html)
         self.assertNotIn("trajectory-pane", html)
         self.assertNotIn("PRIVATE_LIVE_", html)
+        self.assertEqual(html.count('id="case-proof"'), 1)
+        self.assertEqual(html.count('id="isolation"'), 1)
+        self.assertLess(html.index('id="case-proof"'), html.index('id="isolation"'))
+        self.assertIn("20260927T092327Z_10450f3a", html)
+        self.assertIn("Earlier runc case", html)
         self.assertIn("./snapshot.json", html)
         self.assertIn("Content-Security-Policy", html)
         self.assertEqual(json.loads(body)["patterns"][0]["attack_shape"],
