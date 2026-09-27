@@ -32,8 +32,8 @@ from crucible.vultr import model_for_role
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SECOND_URL = "https://172.30.81.250:18444/fixture-check"
-THIRD_URL = "https://172.30.81.250:18445/fixture-check"
+SECOND_URL = "https://172.30.80.1:18444/fixture-check"
+THIRD_URL = "https://172.30.80.1:18445/fixture-check"
 _TASK = re.compile(r"task_[a-f0-9]{16}\Z")
 _EXPECTED_POLICY = {"version": 3, "kind": "net_connect", "field": "port",
                     "operator": "port_in_range", "scope": "local_only",
@@ -104,7 +104,7 @@ def _policy_probes(policy: dict, supervisor: Supervisor, context: dict) -> bool:
         local_read = Action("file_read", {"path": "/work/scenario/reference.txt"}, context)
         network_task = Action("net_connect", {"url": FIREWALL_GAP_URL},
                               {**context, "task_scope": "network_required"})
-        ordinary_port = Action("net_connect", {"url": "https://172.30.81.250:443/fixture-check"}, context)
+        ordinary_port = Action("net_connect", {"url": "https://172.30.80.1:443/fixture-check"}, context)
         return (not plugin.matches_kernel_policy(approved)
                 and not plugin.matches_kernel_policy(local_read)
                 and not plugin.matches_kernel_policy(network_task)

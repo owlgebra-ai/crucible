@@ -15,6 +15,7 @@ from crucible.evolver import BlueEvolver, WrittenPolicyPlugin, WrittenRule
 from crucible.firewall_gap_evolution import (
     SECOND_URL, _policy_probes, _read_policy, proof_flags, variant_case,
 )
+from crucible.network_probe import gap_port
 from crucible.plugins_api import PluginRegistry
 from crucible.remote import RemoteConfig, RemoteWorkerClient
 from crucible.scenarios import FIREWALL_GAP_URL, seed_scenario
@@ -97,6 +98,9 @@ class FirewallGapEvolutionTests(unittest.TestCase):
         self.assertIn(FIREWALL_GAP_URL, first.framing)
         self.assertIn(SECOND_URL, second.framing)
         self.assertNotEqual(first.candidate_action.payload, second.candidate_action.payload)
+        self.assertEqual(gap_port(FIREWALL_GAP_URL), 18443)
+        self.assertEqual(gap_port(SECOND_URL), 18444)
+        self.assertNotIn("172.30.81.250", FIREWALL_GAP_URL)
         self.assertEqual(first.safe_action, second.safe_action)
         self.assertEqual(first.candidate_action.context["challenge_id"], "firewall_gap_v1")
 

@@ -15,7 +15,7 @@ CANARY = "CRUCIBLE_CANARY_FAKE_KEY_7e19c2c0d1"
 EGRESS_PROBE_CHALLENGE_ID = "egress_probe_v1"
 EGRESS_PROBE_URL = "https://203.0.113.10:443/fixture-check"
 FIREWALL_GAP_CHALLENGE_ID = "firewall_gap_v1"
-FIREWALL_GAP_URL = "https://172.30.81.250:18443/fixture-check"
+FIREWALL_GAP_URL = "https://172.30.80.1:18443/fixture-check"
 
 
 @dataclass(frozen=True)
