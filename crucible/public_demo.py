@@ -80,6 +80,15 @@ WALL_CONFIG_CHECKS = (
     "no new privileges", "DNS upstream loopback", "pids limit",
 )
 
+WALL_RUNTIMES = frozenset({"runc", "runsc-oci", "kata-qemu"})
+KATA_ATTESTATION_CHECKS = (
+    "kata-qemu effective Docker runtime",
+    "kata-qemu guest kernel differs from host",
+    "kata-qemu KVM-backed QEMU",
+    "kata-qemu guest seccomp",
+    "kata-qemu guest CPU/memory limit",
+)
+
 WALL_ERROR = "wall proof transcript is incomplete or failed"
 
 
@@ -105,7 +114,7 @@ def parse_wall_proof(transcript: str, *, expected_runtime: str) -> dict[str, Any
     This verifies the script's output structure, not the origin of the file.
     Keep the full private transcript for manual VM attribution and audit.
     """
-    if (expected_runtime not in {"runc", "runsc-oci"} or
+    if (expected_runtime not in WALL_RUNTIMES or
             not isinstance(transcript, str) or len(transcript) > 1_000_000 or
             "\x00" in transcript):
         raise ValueError(WALL_ERROR)
@@ -128,10 +137,12 @@ def parse_wall_proof(transcript: str, *, expected_runtime: str) -> dict[str, Any
     kernel = lines[positions[2] + 1:positions[3]]
     teardown = lines[positions[3] + 1:positions[4]]
 
-    _one_match(host, r"CPU virtualization flag: (?:PRESENT|ABSENT)")
-    _one_match(host, r"/dev/kvm read/write: (?:OK|UNAVAILABLE \([^\r\n]{1,200}\))")
-    runtime = _one_match(container, r"container runtime: (runc|runsc-oci)").group(1)
+    virtualization = _one_match(host, r"CPU virtualization flag: (PRESENT|ABSENT)").group(1)
+    kvm = _one_match(host, r"/dev/kvm read/write: (OK|UNAVAILABLE \([^\r\n]{1,200}\))").group(1)
+    runtime = _one_match(container, r"container runtime: (runc|runsc-oci|kata-qemu)").group(1)
     if runtime != expected_runtime:
+        raise ValueError(WALL_ERROR)
+    if runtime == "kata-qemu" and (virtualization != "PRESENT" or kvm != "OK"):
         raise ValueError(WALL_ERROR)
     for name in (*WALL_CONFIG_CHECKS, f"{runtime} runtime"):
         _one_match(container, re.escape(name) + r": OK")
@@ -147,14 +158,28 @@ def parse_wall_proof(transcript: str, *, expected_runtime: str) -> dict[str, Any
                 raise ValueError(WALL_ERROR)
         elif rows != [f"{name}: OK"]:
             raise ValueError(WALL_ERROR)
-    other_runtime = "runsc-oci" if runtime == "runc" else "runc"
-    if any(line.startswith(f"{other_runtime} runtime:") for line in container):
+    if any(line.startswith(f"{other_runtime} runtime:")
+           for other_runtime in WALL_RUNTIMES - {runtime} for line in container):
         raise ValueError(WALL_ERROR)
     _one_match(container, r"container ID: [a-f0-9]{64}")
     _one_match(container, r"image ID: sha256:[a-f0-9]{64}")
     if runtime == "runsc-oci":
         _one_match(container, r"runsc-oci runtime: verified \(runsc version [^;\r\n]{1,100}; --oci-seccomp, --network=sandbox, --platform=systrap\)")
     elif any(line.startswith("runsc-oci runtime: verified") for line in container):
+        raise ValueError(WALL_ERROR)
+    if runtime == "kata-qemu":
+        for name in KATA_ATTESTATION_CHECKS:
+            if [line for line in container if line.startswith(f"{name}: ")] != [f"{name}: OK"]:
+                raise ValueError(WALL_ERROR)
+        guest_kernel = _one_match(container, r"kata-qemu guest kernel: ([^\r\n]{1,200})").group(1)
+        host_kernel = _one_match(container, r"kata-qemu host kernel: ([^\r\n]{1,200})").group(1)
+        if guest_kernel == host_kernel:
+            raise ValueError(WALL_ERROR)
+        if [line for line in container if line.startswith("kata-qemu guest kernel: ")] != [f"kata-qemu guest kernel: {guest_kernel}"]:
+            raise ValueError(WALL_ERROR)
+        if [line for line in container if line.startswith("kata-qemu host kernel: ")] != [f"kata-qemu host kernel: {host_kernel}"]:
+            raise ValueError(WALL_ERROR)
+    elif any(line.startswith("kata-qemu ") for line in container + teardown):
         raise ValueError(WALL_ERROR)
     subnet = _one_match(container, r"Policy bridge: [A-Za-z0-9_.-]+ \([A-Za-z0-9_.-]+, ([0-9./]+)\)").group(1)
     address = _one_match(container, r"Probe container IPv4: ([0-9.]+)").group(1)
@@ -185,11 +210,19 @@ def parse_wall_proof(transcript: str, *, expected_runtime: str) -> dict[str, Any
         raise ValueError(WALL_ERROR)
     _one_match(kernel, r"Default DROP remains the next and final egress rule")
     _one_match(teardown, r"No container remains for proof-[a-f0-9]{16}")
-    return {"status": "checks_passed", "runtime": runtime,
+    if runtime == "kata-qemu" and [line for line in teardown if line.startswith(
+            "kata-qemu task microVM destroyed: ")] != ["kata-qemu task microVM destroyed: OK"]:
+        raise ValueError(WALL_ERROR)
+    result = {"status": "checks_passed", "runtime": runtime,
             "container_policy_checks": len(WALL_CONFIG_CHECKS) + 1,
             "allowlisted_tls": True, "external_dns_blocked": True,
             "direct_ip_drop": True, "drop_packets": packets,
             "ptrace_blocked": True, "container_destroyed": True}
+    if runtime == "kata-qemu":
+        result.update({"guest_kernel_separate": True, "kvm_backed": True,
+                       "guest_seccomp": True, "guest_cpu_memory_limited": True,
+                       "microvm_destroyed": True})
+    return result
 
 
 def _bounded_int(value: object, maximum: int = 1_000_000) -> int:
@@ -343,7 +376,9 @@ def _static_html() -> str:
         "          ' · ' + proof.drop_packets + ' probe packet' + (proof.drop_packets === 1 ? '' : 's') +\n"
         "          ' at the default DROP path';\n"
         "        $('wall-proof-status').className = 'safe';\n"
-        "        $('wall-proof-detail').textContent = 'Container profile, pinned TLS, blocked external DNS, denied ptrace, and teardown were recorded. The full VM transcript remains private for review.';\n"
+        "        $('wall-proof-detail').textContent = proof.runtime === 'kata-qemu' ?\n"
+        "          'KVM-backed Kata guest, separate kernel, guest seccomp and resource limits, network policy, denied ptrace, and microVM teardown were recorded. The full VM transcript remains private for review.' :\n"
+        "          'Container profile, pinned TLS, blocked external DNS, denied ptrace, and teardown were recorded. The full VM transcript remains private for review.';\n"
         "      } else {\n"
         "        $('wall-proof-status').textContent = 'No wall proof summary attached.';\n"
         "        $('wall-proof-status').className = 'empty';\n"
@@ -387,8 +422,8 @@ def export(db_path: str | Path, output_dir: str | Path, *, limit: int = 200,
     if require_wall_proof and wall_proof_path is None:
         raise ValueError("public Pages source requires a wall proof transcript")
     if wall_proof_path is not None:
-        if wall_runtime not in {"runc", "runsc-oci"}:
-            raise ValueError("wall proof requires an explicit runc or runsc-oci runtime")
+        if wall_runtime not in WALL_RUNTIMES:
+            raise ValueError("wall proof requires an explicit runc, runsc-oci, or kata-qemu runtime")
         try:
             with Path(wall_proof_path).open("rb") as stream:
                 raw = stream.read(1_000_001)
@@ -429,7 +464,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--require-live", action="store_true",
                         help="require a verified Docker or remote sandbox episode")
     parser.add_argument("--wall-proof", help="private prove-wall.sh transcript to summarize")
-    parser.add_argument("--wall-runtime", choices=("runc", "runsc-oci"),
+    parser.add_argument("--wall-runtime", choices=("runc", "runsc-oci", "kata-qemu"),
                         help="expected runtime for the wall transcript")
     parser.add_argument("--require-wall-proof", action="store_true",
                         help="refuse a Pages source without a complete passing wall transcript")

@@ -21,7 +21,8 @@ def wall_transcript(runtime="runc"):
     lines = [
         "[1/5] Host virtualization",
         "CPU virtualization flag: PRESENT",
-        "/dev/kvm read/write: UNAVAILABLE ([Errno 2] No such file or directory)",
+        ("/dev/kvm read/write: OK" if runtime == "kata-qemu" else
+         "/dev/kvm read/write: UNAVAILABLE ([Errno 2] No such file or directory)"),
         "[2/5] Container and policy probe",
         *(f"{name}: OK" for name in checks),
         "container ID: " + "a" * 64,
@@ -31,6 +32,16 @@ def wall_transcript(runtime="runc"):
     if runtime == "runsc-oci":
         lines.append("runsc-oci runtime: verified (runsc version 20260926.0; "
                      "--oci-seccomp, --network=sandbox, --platform=systrap)")
+    elif runtime == "kata-qemu":
+        lines.extend([
+            "kata-qemu effective Docker runtime: OK",
+            "kata-qemu guest kernel differs from host: OK",
+            "kata-qemu KVM-backed QEMU: OK",
+            "kata-qemu guest seccomp: OK",
+            "kata-qemu guest CPU/memory limit: OK",
+            "kata-qemu guest kernel: 6.12.0-kata",
+            "kata-qemu host kernel: 6.8.0-host",
+        ])
     lines.extend([
         "Policy bridge: br-crucible (crucible-net, 172.30.99.0/24)",
         "Probe container IPv4: 172.30.99.2",
@@ -48,6 +59,7 @@ def wall_transcript(runtime="runc"):
         "Default DROP remains the next and final egress rule",
         "[4/5] Container teardown",
         "No container remains for proof-" + "c" * 16,
+        *(["kata-qemu task microVM destroyed: OK"] if runtime == "kata-qemu" else []),
         "[5/5] Wall proof complete",
     ])
     return "\n".join(lines) + "\n"
@@ -197,7 +209,7 @@ class PublicDemoTests(unittest.TestCase):
             export(self.db, self.site)
 
     def test_wall_proof_summary_excludes_private_transcript_fields(self):
-        for runtime in ("runc", "runsc-oci"):
+        for runtime in ("runc", "runsc-oci", "kata-qemu"):
             with self.subTest(runtime=runtime):
                 result = parse_wall_proof(wall_transcript(runtime),
                                           expected_runtime=runtime)
@@ -205,10 +217,78 @@ class PublicDemoTests(unittest.TestCase):
                 self.assertEqual(result["runtime"], runtime)
                 self.assertEqual(result["drop_packets"], 3)
                 self.assertTrue(result["direct_ip_drop"])
+                self.assertEqual(result["container_policy_checks"], 11)
+                if runtime == "kata-qemu":
+                    for field in ("guest_kernel_separate", "kvm_backed", "guest_seccomp",
+                                  "guest_cpu_memory_limited", "microvm_destroyed"):
+                        self.assertIs(result[field], True)
+                else:
+                    self.assertNotIn("microvm_destroyed", result)
                 body = json.dumps(result)
                 for private in (PRIVATE_PROOF_MARKER, "172.30.99.2", "1.1.1.1",
-                                "a" * 64, "b" * 64, "c" * 16, "20260926.0"):
+                                "a" * 64, "b" * 64, "c" * 16, "20260926.0",
+                                "6.12.0-kata", "6.8.0-host"):
                     self.assertNotIn(private, body)
+
+    def test_kata_wall_proof_requires_complete_guest_and_teardown_attestation(self):
+        valid = wall_transcript("kata-qemu")
+        required = [
+            "CPU virtualization flag: PRESENT",
+            "/dev/kvm read/write: OK",
+            "kata-qemu runtime: OK",
+            "kata-qemu effective Docker runtime: OK",
+            "kata-qemu guest kernel differs from host: OK",
+            "kata-qemu KVM-backed QEMU: OK",
+            "kata-qemu guest seccomp: OK",
+            "kata-qemu guest CPU/memory limit: OK",
+            "kata-qemu guest kernel: 6.12.0-kata",
+            "kata-qemu host kernel: 6.8.0-host",
+            "kata-qemu task microVM destroyed: OK",
+            '"ptrace": "BLOCKED"',
+            '"direct_egress": "TIMEOUT"',
+            "Probe-specific packets immediately before default DROP: 3",
+        ]
+        for line in required:
+            with self.subTest(missing=line):
+                with self.assertRaisesRegex(ValueError, "incomplete or failed"):
+                    parse_wall_proof(valid.replace(line, "", 1), expected_runtime="kata-qemu")
+            with self.subTest(duplicate=line):
+                with self.assertRaisesRegex(ValueError, "incomplete or failed"):
+                    parse_wall_proof(valid.replace(line, line + "\n" + line, 1),
+                                     expected_runtime="kata-qemu")
+        changed = [
+            valid.replace("CPU virtualization flag: PRESENT", "CPU virtualization flag: ABSENT"),
+            valid.replace("/dev/kvm read/write: OK", "/dev/kvm read/write: UNAVAILABLE ([Errno 2] missing)"),
+            valid.replace("kata-qemu guest kernel: 6.12.0-kata", "kata-qemu guest kernel: 6.8.0-host"),
+            valid.replace("kata-qemu guest seccomp: OK", "kata-qemu guest seccomp: FAILED"),
+            valid.replace("default DROP: 3", "default DROP: 0"),
+            valid.replace('"ptrace": "BLOCKED"', '"ptrace": "ALLOWED"'),
+        ]
+        for transcript in changed:
+            with self.assertRaisesRegex(ValueError, "incomplete or failed"):
+                parse_wall_proof(transcript, expected_runtime="kata-qemu")
+        with self.assertRaisesRegex(ValueError, "incomplete or failed"):
+            parse_wall_proof(valid, expected_runtime="runc")
+        with self.assertRaisesRegex(ValueError, "incomplete or failed"):
+            parse_wall_proof(wall_transcript("runc").replace(
+                "No container remains for proof-", "kata-qemu task microVM destroyed: OK\nNo container remains for proof-"),
+                expected_runtime="runc")
+
+    def test_kata_export_exposes_only_fixed_proof_fields(self):
+        ExperienceBank(self.db)
+        proof = self.root / "kata-proof.txt"
+        proof.write_text(wall_transcript("kata-qemu"))
+        export(self.db, self.site, wall_proof_path=proof,
+               wall_runtime="kata-qemu", require_wall_proof=True)
+        body = (self.site / "snapshot.json").read_text()
+        html = (self.site / "index.html").read_text()
+        parsed = json.loads(body)["wall_proof"]
+        self.assertEqual(parsed["runtime"], "kata-qemu")
+        self.assertTrue(parsed["microvm_destroyed"])
+        self.assertIn("KVM-backed Kata guest", html)
+        self.assertNotIn(PRIVATE_PROOF_MARKER, body + html)
+        self.assertNotIn("6.12.0-kata", body + html)
+        self.assertNotIn("6.8.0-host", body + html)
 
     def test_wall_proof_rejects_missing_failed_or_conflicting_checks(self):
         valid = wall_transcript()
@@ -259,7 +339,7 @@ class PublicDemoTests(unittest.TestCase):
         self.assertFalse(self.site.exists())
         private_proof = self.root / "wall-proof.txt"
         private_proof.write_text(wall_transcript())
-        with self.assertRaisesRegex(ValueError, "explicit runc or runsc-oci"):
+        with self.assertRaisesRegex(ValueError, "explicit runc, runsc-oci, or kata-qemu"):
             export(self.db, self.site, require_docker=True,
                    wall_proof_path=private_proof, require_wall_proof=True)
         summary = export(self.db, self.site, require_docker=True,

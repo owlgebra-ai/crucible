@@ -27,14 +27,21 @@ python3 -m http.server 8000 --directory dist/public-demo
 ```
 
 Use `--wall-runtime runsc-oci` only for a transcript from the optional gVisor
-runtime. The parser requires the chosen runtime's explicit Docker check; for
-`runsc-oci`, it also requires the host attestation with OCI seccomp and sandbox
-networking. For either runtime it requires all container checks, successful
+runtime. Use `--wall-runtime kata-qemu` only after a Kata wall proof passes on
+the sandbox VM. The parser requires the chosen runtime's explicit Docker check;
+for `runsc-oci`, it also requires the host attestation with OCI seccomp and
+sandbox networking. For `kata-qemu`, it additionally requires a readable KVM
+device, a separate guest kernel, KVM-backed QEMU, guest seccomp and CPU/memory
+limits, and task microVM teardown. For every runtime it requires all 11
+container checks, successful
 pinned TLS, denied external DNS and `ptrace`, a timed-out direct-IP probe with
 a positive counter immediately before the final DROP, container teardown, and
 the final completion marker. Failed, partial, conflicting, or duplicate proof
 transcripts stop the export. The resulting JSON contains the fixed runtime
 label and check summary; it never contains the raw transcript or identifiers.
+The Kata wall proof attests an isolated probe; it does not by itself prove that
+a later model-driven episode used Kata. Check that episode's recorded runtime
+and action result separately before claiming tier 04 for the model loop.
 
 Visit `http://127.0.0.1:8000` and inspect both generated files. The exporter
 reports same-host Docker and remote sandbox VM episodes separately; the live
