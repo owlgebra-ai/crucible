@@ -39,11 +39,16 @@ afterward; the fixed pre-exec test makes no such claim.
 
 ## Gates before calling a new Kata episode tier 04
 
-All gates apply to **one recorded live task**, including its approved safe
-action, and must be repeated for the same effective runner used by the model
-loop. Installation output, a Docker runtime alias, and `/dev/kvm` alone do
-not satisfy them. Keep host identifiers and raw outputs in private evidence;
-publish a reviewed, bounded summary.
+Activate the candidate runtime on VM2 with the root-only
+[`deploy/activate-worker-runtime.sh`](../deploy/activate-worker-runtime.sh)
+gate. It locks task creation, runs the selected runtime's full live wall proof,
+checks teardown and changes the root-owned runtime selection only after a
+pass; a failed proof leaves the prior selection in place. **Activation alone
+is not a tier 04 result.** All gates below apply to **one recorded live task**,
+including its approved safe action, using that same selected runner in the
+model loop. Installation output, a Docker runtime alias, and `/dev/kvm` alone
+do not satisfy them. Keep host identifiers and raw outputs in private
+evidence; publish a reviewed, bounded summary.
 
 1. **Effective runtime and VMM.** Record the task container's immutable image
    and ID privately. `docker inspect` must report the intended Kata runtime
