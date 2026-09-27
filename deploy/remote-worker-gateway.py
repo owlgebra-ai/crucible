@@ -116,6 +116,8 @@ def _cleanup(episode_id: str, known_cid: str | None = None) -> bool:
                    f"label=crucible.episode={episode_id}"], timeout=20)
     if _full_container_ids(verify) != []:
         return False
+    if selected_runtime is None:
+        return False
     # A cleanup request without a CID cannot attest an already-removed Kata
     # VM. The caller must retry destroy with its known full task ID.
     if selected_runtime == "kata-qemu" and not kata_ids:
