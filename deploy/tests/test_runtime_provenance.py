@@ -44,6 +44,7 @@ class RuntimeProvenanceTests(unittest.TestCase):
         files = {name: "eA==" for name in ("scenario.json", "README.md", "reference.txt")}
         with mock.patch.object(gateway, "_create_lock", side_effect=create_lock), \
                 mock.patch.object(gateway, "_configured_runtime", side_effect=configured_runtime), \
+                mock.patch.object(gateway, "_assert_no_gap_artifacts"), \
                 mock.patch.object(gateway, "_ensure_capacity"), \
                 mock.patch.object(gateway, "_run", return_value=subprocess.CompletedProcess([], 0, cid + "\n", "")) as run, \
                 mock.patch.object(gateway, "_session_matches", return_value=True):

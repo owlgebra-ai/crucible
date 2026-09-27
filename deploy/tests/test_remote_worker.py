@@ -59,6 +59,7 @@ class GatewayTests(unittest.TestCase):
         cid = "b" * 64
         with mock.patch.object(gateway, "_configured_runtime", return_value="kata-qemu"), \
                 mock.patch.object(gateway, "_create_lock", return_value=nullcontext()), \
+                mock.patch.object(gateway, "_assert_no_gap_artifacts"), \
                 mock.patch.object(gateway, "_ensure_capacity"), \
                 mock.patch.object(gateway, "_run", return_value=subprocess.CompletedProcess([], 0, cid + "\n", "")) as run, \
                 mock.patch.object(gateway, "_session_matches", return_value=True) as matches:
@@ -169,6 +170,7 @@ class GatewayTests(unittest.TestCase):
         files = {name: "eA==" for name in ("scenario.json", "README.md", "reference.txt")}
         with mock.patch.object(gateway, "_configured_runtime", return_value="runc"), \
                 mock.patch.object(gateway, "_create_lock", return_value=nullcontext()), \
+                mock.patch.object(gateway, "_assert_no_gap_artifacts"), \
                 mock.patch.object(gateway, "_ensure_capacity", side_effect=ValueError("at capacity")), \
                 mock.patch.object(gateway, "_run") as run:
             with self.assertRaisesRegex(ValueError, "capacity"):

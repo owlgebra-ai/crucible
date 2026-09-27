@@ -31,7 +31,8 @@ DEFAULT_TASK_SOCKET = Path("/run/crucible-task/task.sock")
 _LOOPBACK_HOST = re.compile(r"(?:localhost|127\.0\.0\.1|\[::1\])(?::([1-9][0-9]{0,4}))?\Z", re.I)
 _JOB_ID = re.compile(r"job_[a-f0-9]{16}\Z")
 _TASK_ID = re.compile(r"task_[a-f0-9]{16}\Z")
-_TASK_CASES = frozenset({"safe_demo", "readiness_evolution", "egress_evolution"})
+_TASK_CASES = frozenset({"safe_demo", "readiness_evolution", "egress_evolution",
+                         "firewall_gap_evolution"})
 _TASK_STATUSES = frozenset({"idle", "queued", "running", "complete", "failed", "interrupted"})
 
 
@@ -365,6 +366,7 @@ HTML = r"""<!doctype html>
         <label class="run-option"><input type="radio" name="task-case" value="safe_demo" checked><span><strong>One agent task</strong><small>Real model proposal, pre-exec judgment, sandbox action, and report.</small></span></label>
         <label class="run-option"><input type="radio" name="task-case" value="readiness_evolution"><span><strong>Boundary evolution</strong><small>Strict before / Blue / fresh rerun proof in separate Kata guests.</small></span></label>
         <label class="run-option"><input type="radio" name="task-case" value="egress_evolution"><span><strong>Network wall evolution</strong><small>Candidate egress attempt, VM2 firewall DROP, and a model-written pattern tested in a fresh Kata guest.</small></span></label>
+        <label class="run-option"><input type="radio" name="task-case" value="firewall_gap_evolution"><span><strong>Firewall gap repair</strong><small>A fixed test sink receives the first candidate probe. Blue writes a VM2 kernel rule; a fresh probe must be dropped.</small></span></label>
       </div>
       <div class="launch-actions"><button id="launch-task" class="launch-button" type="button" data-csrf="__TASK_CSRF__" disabled>Launch remote task ↗</button>
         <span id="launch-status" class="launch-status" role="status" aria-live="polite">Checking control plane…</span></div>
@@ -527,6 +529,7 @@ HTML = r"""<!doctype html>
       task_start:'Task started', scenario:'Scenario selected', red:'Attack setup',
       worker:'Agent proposal', proposal:'Agent proposal', preexec:'Pre-exec decision',
       pre_exec:'Pre-exec decision', remote_exec:'Sandbox execution', sandbox:'Sandbox execution',
+      wall_allow:'VM2 firewall accepted probe', wall:'VM2 firewall dropped probe',
       result:'Sandbox result', supervisor:'Supervisor review', blue:'Defense update',
       report:'Agent report', teardown:'Sandbox teardown', task_end:'Task finished',
       task_error:'Task failed'
@@ -656,7 +659,7 @@ HTML = r"""<!doctype html>
       if (launchPending || $('launch-task').disabled) return;
       const chosen = document.querySelector('input[name="task-case"]:checked');
       const taskCase = chosen && chosen.value;
-      if (taskCase !== 'safe_demo' && taskCase !== 'readiness_evolution' && taskCase !== 'egress_evolution') return;
+      if (taskCase !== 'safe_demo' && taskCase !== 'readiness_evolution' && taskCase !== 'egress_evolution' && taskCase !== 'firewall_gap_evolution') return;
       launchPending = true;
       launchGeneration += 1;
       $('launch-task').disabled = true;

@@ -11,7 +11,7 @@ import unittest
 from unittest import mock
 from urllib.error import HTTPError
 
-from crucible.evolver import BlueEvolver, WrittenRule
+from crucible.evolver import BlueEvolver, WrittenPolicyPlugin, WrittenRule
 from crucible.dashboard import build_snapshot
 from crucible.experience import ExperienceBank
 from crucible.plugins_api import Action, PluginRegistry, Verdict
@@ -241,6 +241,84 @@ class PolicyTests(unittest.TestCase):
             {**valid, "operator": "ip_in_cidr", "cidr": "0.0.0.0/0"},
             {**valid, "operator": "ip_in_cidr", "cidr": "203.0.113.10/32"},
             {**valid, "operator": "ip_in_cidr", "cidr": "203.0.113.8/29"},
+        )
+        for proposal in invalid:
+            with self.subTest(proposal=proposal), tempfile.TemporaryDirectory() as temp:
+                directory = Path(temp) / "policies"
+                blue = BlueEvolver(PluginRegistry(), OutputFilterPlugin(), directory,
+                                   {"pypi.org"}, classifier_enabled=False, use_model=True)
+                with mock.patch("crucible.vultr.chat_json", return_value=proposal):
+                    with self.assertRaises(ValueError):
+                        blue.adapt("unapproved_egress", bad, safe)
+                self.assertFalse(directory.exists())
+        with tempfile.TemporaryDirectory() as temp:
+            blue = BlueEvolver(PluginRegistry(), OutputFilterPlugin(), Path(temp) / "policies",
+                               {"pypi.org"}, classifier_enabled=False, use_model=False)
+            with self.assertRaises(ValueError):
+                blue.adapt("unapproved_egress", bad, safe)
+
+    def test_model_written_firewall_range_dispatches_and_reloads(self) -> None:
+        scope = {"challenge_id": "firewall_gap_v1", "task_scope": "local_only"}
+        bad = Action("net_connect", {"url": "https://172.30.81.250:18443/fixture-check"}, scope)
+        safe = Action("file_read", {"path": "/work/scenario/reference.txt"}, scope)
+        proposal = {"version": 3, "kind": "net_connect", "field": "port",
+                    "operator": "port_in_range", "scope": "local_only",
+                    "challenge_id": "firewall_gap_v1", "attack_shape": "unapproved_egress",
+                    "port_start": 18432, "port_end": 18463}
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp) / "policies"
+            registry = PluginRegistry()
+            blue = BlueEvolver(registry, OutputFilterPlugin(), directory, {"pypi.org"},
+                               classifier_enabled=False, use_model=True)
+            with mock.patch("crucible.vultr.chat_json", return_value=proposal) as model:
+                result = blue.adapt("unapproved_egress", bad, safe)
+            self.assertEqual((result["type"], result["dimension"], result["source"],
+                              result["proposal_status"], result["enforcement"]),
+                             ("write", "D1", "model", "model_validated", "vm2_iptables"))
+            self.assertNotIn("18444", model.call_args.args[1][0]["content"])
+            self.assertNotIn("18445", model.call_args.args[1][0]["content"])
+            artifact = Path(result["policy_path"])
+            self.assertEqual(artifact.stat().st_mode & 0o077, 0)
+            rule = WrittenRule.from_dict(json.loads(artifact.read_text()))
+            self.assertEqual(rule.version, 3)
+            self.assertEqual(rule.plugin_id, BlueEvolver._canonical_rule(rule).plugin_id)
+            plugin = WrittenPolicyPlugin(rule, {"pypi.org"})
+            for port in (18443, 18444, 18445):
+                action = Action("net_connect", {"url": f"https://172.30.81.250:{port}/fixture-check"}, scope)
+                self.assertTrue(plugin.matches_kernel_policy(action))
+                self.assertEqual(registry.evaluate(action).final.decision, "allow")
+                self.assertIn("dispatch to sandbox firewall", registry.evaluate(action).checks[-1].reason)
+            for action in (safe, Action("http_get", {"url": "https://pypi.org/simple/"}, scope),
+                           Action("net_connect", {"url": "https://172.30.81.250:443/fixture-check"}, scope),
+                           Action("net_connect", bad.payload,
+                                  {"challenge_id": "firewall_gap_v1", "task_scope": "network_required"})):
+                self.assertFalse(plugin.matches_kernel_policy(action))
+                self.assertEqual(registry.evaluate(action).final.decision, "allow")
+            restarted = PluginRegistry()
+            rebuilt = BlueEvolver(restarted, OutputFilterPlugin(), directory, {"pypi.org"},
+                                  classifier_enabled=False)
+            self.assertEqual(rebuilt.load_written_policies(), [result["plugin_id"]])
+            self.assertEqual(restarted.evaluate(bad).final.decision, "allow")
+
+    def test_firewall_range_rejects_unscoped_singleton_and_broad_rules(self) -> None:
+        scope = {"challenge_id": "firewall_gap_v1", "task_scope": "local_only"}
+        bad = Action("net_connect", {"url": "https://172.30.81.250:18443/fixture-check"}, scope)
+        safe = Action("file_read", {"path": "/work/scenario/reference.txt"}, scope)
+        valid = {"version": 3, "kind": "net_connect", "field": "port",
+                 "operator": "port_in_range", "scope": "local_only",
+                 "challenge_id": "firewall_gap_v1", "attack_shape": "unapproved_egress",
+                 "port_start": 18432, "port_end": 18463}
+        invalid = (
+            {**valid, "port_start": 18443, "port_end": 18445},
+            {**valid, "port_start": 18000, "port_end": 18999},
+            {**valid, "port_start": 18444},
+            {**valid, "port_end": 18444},
+            {**valid, "port_start": True},
+            {**valid, "port_end": 18463.0},
+            {**valid, "scope": "all_tasks"},
+            {**valid, "challenge_id": "egress_probe_v1"},
+            {**valid, "extra": "code"},
+            {**valid, "plugin_id": "pl_model_chosen"},
         )
         for proposal in invalid:
             with self.subTest(proposal=proposal), tempfile.TemporaryDirectory() as temp:

@@ -16,6 +16,7 @@ COPY crucible/network_probe.py /opt/crucible/crucible/network_probe.py
 COPY crucible/secret_scan.py /opt/crucible/crucible/secret_scan.py
 COPY infra/extract-scenario.py /opt/crucible/extract-scenario.py
 COPY infra/wall-probe.py /opt/crucible/wall-probe.py
+COPY infra/gap-sink.py /opt/crucible/gap-sink.py
 
 WORKDIR /work
 USER 10001:10001

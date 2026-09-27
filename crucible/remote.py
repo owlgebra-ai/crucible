@@ -134,16 +134,29 @@ class RemoteWorkerClient:
         return self._runtime_by_cid.get(cid)
 
     def execute(self, cid: str, episode_id: str, action: dict[str, Any], *,
-                challenge_id: str | None = None) -> dict[str, Any]:
+                challenge_id: str | None = None,
+                firewall_policy: dict[str, Any] | None = None) -> dict[str, Any]:
         if not _CID.fullmatch(cid) or not _EPISODE.fullmatch(episode_id):
             raise ValueError("invalid remote session ID")
         request = {"op": "exec", "container_id": cid,
                    "episode_id": episode_id, "action": action}
         if challenge_id is not None:
-            if challenge_id != "egress_probe_v1":
+            if challenge_id not in {"egress_probe_v1", "firewall_gap_v1"}:
                 raise ValueError("invalid remote challenge ID")
+            if action.get("kind") != "net_connect":
+                raise ValueError("a remote challenge requires net_connect")
             request["challenge_id"] = challenge_id
-        response = self._call(request, timeout=95)
+        if firewall_policy is not None:
+            if challenge_id != "firewall_gap_v1":
+                raise ValueError("firewall policy requires the fixed gap challenge")
+            from crucible.evolver import BlueEvolver, WrittenRule
+            rule = WrittenRule.from_dict(firewall_policy)
+            if (rule.version != 3 or rule.challenge_id != challenge_id or
+                    rule.scope != "local_only" or
+                    BlueEvolver._canonical_rule(rule).plugin_id != rule.plugin_id):
+                raise ValueError("invalid model-derived firewall policy")
+            request["firewall_policy"] = rule.to_dict()
+        response = self._call(request, timeout=180 if challenge_id == "firewall_gap_v1" else 95)
         result = response.get("result")
         if not isinstance(result, dict):
             raise RemoteError("remote gateway returned an invalid worker result")

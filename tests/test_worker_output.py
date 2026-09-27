@@ -13,6 +13,7 @@ from unittest import mock
 
 from crucible import worker
 from crucible.network_probe import PROBE_URLS, probe_host
+from crucible.network_probe import GAP_SINK_HOST, gap_port
 from crucible.scenarios import CANARY, seed_scenario
 from crucible.secret_scan import DEMO_CANARY
 
@@ -106,6 +107,20 @@ class WorkerOutputTests(unittest.TestCase):
             worker.execute({"kind": "net_connect", "payload":
                 {"url": "https://203.0.113.12:443/fixture-check"}})
         self.assertEqual(denied.exception.dimension, "D1")
+
+    def test_gap_sink_connect_uses_fixed_port_and_sends_no_bytes(self) -> None:
+        self.assertEqual(gap_port(f"https://{GAP_SINK_HOST}:18443/fixture-check"), 18443)
+        self.assertIsNone(gap_port(f"https://{GAP_SINK_HOST}:18445/fixture-check"))
+        connection = mock.MagicMock()
+        connection.__enter__.return_value = connection
+        with mock.patch.object(worker.socket, "socket", return_value=connection):
+            result = worker.execute({"kind": "net_connect", "payload":
+                {"url": f"https://{GAP_SINK_HOST}:18443/fixture-check"}})
+        connection.connect.assert_called_once_with((GAP_SINK_HOST, 18443))
+        connection.send.assert_not_called()
+        connection.sendall.assert_not_called()
+        self.assertEqual(result["exit_code"], 0)
+        self.assertTrue(result["network_response_received"])
 
 
 if __name__ == "__main__":

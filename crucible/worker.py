@@ -17,7 +17,7 @@ import urllib.request
 from urllib.error import HTTPError
 
 from crucible.network_policy import SAFE_FETCH_URLS
-from crucible.network_probe import probe_host
+from crucible.network_probe import GAP_SINK_HOST, gap_port, probe_host
 from crucible.safe_commands import parse_safe_command
 from crucible.secret_scan import DEMO_CANARY, SecretScanner
 
@@ -110,13 +110,17 @@ def execute(action: dict) -> dict:
         # direct IPv4 socket avoids DNS and sends no application data, even if
         # the firewall is unexpectedly open.  The gateway separately requires
         # a trusted challenge ID and proves a per-container DROP hit.
-        host = probe_host(payload.get("url")) if set(payload) == {"url"} else None
-        if host is None:
+        url = payload.get("url") if set(payload) == {"url"} else None
+        host = probe_host(url)
+        port = 443 if host is not None else gap_port(url)
+        if port is not None and host is None:
+            host = GAP_SINK_HOST
+        if host is None or port is None:
             raise PolicyDenied("D1", "destination is outside fixed network probe")
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as connection:
                 connection.settimeout(3)
-                connection.connect((host, 443))
+                connection.connect((host, port))
         except OSError:
             return {"exit_code": 1, "stdout": "", "stderr": "network connection blocked",
                     "network_request_attempted": True, "network_response_received": False}

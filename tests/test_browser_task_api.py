@@ -92,6 +92,16 @@ class BrowserTaskHTTPTests(unittest.TestCase):
         self.assertEqual(current["status"], "queued")
         self.assertEqual(self.broker.requests[-1], {"op": "current"})
 
+    def test_firewall_gap_case_is_browser_launchable_without_user_supplied_targets(self) -> None:
+        token = self._token()
+        status = self._post(b'{"case":"firewall_gap_evolution"}', csrf=token)
+        self.assertEqual(status, 202)
+        self.assertEqual(self.broker.requests, [{"op": "start", "case": "firewall_gap_evolution"}])
+        self.assertEqual(self._post(
+            b'{"case":"firewall_gap_evolution","url":"https://example.com"}',
+            csrf=token), 400)
+        self.assertEqual(len(self.broker.requests), 1)
+
     def test_cross_origin_rebinding_and_arbitrary_fields_are_rejected(self) -> None:
         token = self._token()
         self.assertEqual(self._post(b'{"case":"safe_demo"}', csrf=token,
