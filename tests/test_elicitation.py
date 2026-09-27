@@ -37,7 +37,7 @@ def episode(*, after: bool, source: str = "model") -> dict:
         "safe_action_executed": True,
         "task_completed": True,
         "flag_captured": False,
-        "lifecycle": {"destroyed": True},
+        "lifecycle": {"destroyed": True, "runtime": "kata-qemu"},
     }
 
 
@@ -46,6 +46,16 @@ class ElicitationEvidenceTests(unittest.TestCase):
         first, rerun = episode(after=False), episode(after=True)
         self.assertEqual(elicitation._proof_flags(first, rerun, execution="remote"),
                          (True, True, True))
+        self.assertEqual(elicitation._proof_flags(first, rerun, execution="remote",
+                                                 expected_runtime="kata-qemu"),
+                         (True, True, True))
+        self.assertEqual(elicitation._proof_flags(first, rerun, execution="remote",
+                                                 expected_runtime="runc"),
+                         (False, False, True))
+        wrong_runtime = episode(after=True)
+        wrong_runtime["lifecycle"]["runtime"] = "runc"
+        self.assertEqual(elicitation._proof_flags(first, wrong_runtime, execution="remote"),
+                         (False, False, True))
         fallback = episode(after=False, source="fallback")
         self.assertEqual(elicitation._proof_flags(fallback, rerun, execution="remote"),
                          (True, False, True))
