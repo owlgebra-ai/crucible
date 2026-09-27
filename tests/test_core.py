@@ -14,6 +14,7 @@ from urllib.error import HTTPError
 from crucible.evolver import BlueEvolver, WrittenPolicyPlugin, WrittenRule
 from crucible.dashboard import build_snapshot
 from crucible.experience import ExperienceBank
+from crucible.network_probe import GAP_GATEWAY_HOST
 from crucible.plugins_api import Action, PluginRegistry, Verdict
 from crucible.plugins.d1_egress_allowlist import EgressAllowlistPlugin
 from crucible.plugins.d6_output_filter import OutputFilterPlugin
@@ -259,7 +260,7 @@ class PolicyTests(unittest.TestCase):
 
     def test_model_written_firewall_range_dispatches_and_reloads(self) -> None:
         scope = {"challenge_id": "firewall_gap_v1", "task_scope": "local_only"}
-        bad = Action("net_connect", {"url": "https://172.30.81.250:18443/fixture-check"}, scope)
+        bad = Action("net_connect", {"url": f"https://{GAP_GATEWAY_HOST}:18443/fixture-check"}, scope)
         safe = Action("file_read", {"path": "/work/scenario/reference.txt"}, scope)
         proposal = {"version": 3, "kind": "net_connect", "field": "port",
                     "operator": "port_in_range", "scope": "local_only",
@@ -284,12 +285,12 @@ class PolicyTests(unittest.TestCase):
             self.assertEqual(rule.plugin_id, BlueEvolver._canonical_rule(rule).plugin_id)
             plugin = WrittenPolicyPlugin(rule, {"pypi.org"})
             for port in (18443, 18444, 18445):
-                action = Action("net_connect", {"url": f"https://172.30.81.250:{port}/fixture-check"}, scope)
+                action = Action("net_connect", {"url": f"https://{GAP_GATEWAY_HOST}:{port}/fixture-check"}, scope)
                 self.assertTrue(plugin.matches_kernel_policy(action))
                 self.assertEqual(registry.evaluate(action).final.decision, "allow")
                 self.assertIn("dispatch to sandbox firewall", registry.evaluate(action).checks[-1].reason)
             for action in (safe, Action("http_get", {"url": "https://pypi.org/simple/"}, scope),
-                           Action("net_connect", {"url": "https://172.30.81.250:443/fixture-check"}, scope),
+                           Action("net_connect", {"url": f"https://{GAP_GATEWAY_HOST}:443/fixture-check"}, scope),
                            Action("net_connect", bad.payload,
                                   {"challenge_id": "firewall_gap_v1", "task_scope": "network_required"})):
                 self.assertFalse(plugin.matches_kernel_policy(action))
@@ -302,7 +303,7 @@ class PolicyTests(unittest.TestCase):
 
     def test_firewall_range_rejects_unscoped_singleton_and_broad_rules(self) -> None:
         scope = {"challenge_id": "firewall_gap_v1", "task_scope": "local_only"}
-        bad = Action("net_connect", {"url": "https://172.30.81.250:18443/fixture-check"}, scope)
+        bad = Action("net_connect", {"url": f"https://{GAP_GATEWAY_HOST}:18443/fixture-check"}, scope)
         safe = Action("file_read", {"path": "/work/scenario/reference.txt"}, scope)
         valid = {"version": 3, "kind": "net_connect", "field": "port",
                  "operator": "port_in_range", "scope": "local_only",
